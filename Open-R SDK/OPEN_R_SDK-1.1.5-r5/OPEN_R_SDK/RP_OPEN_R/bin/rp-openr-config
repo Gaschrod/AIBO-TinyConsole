@@ -1,0 +1,110 @@
+#!/bin/sh
+#
+#  Copyright 2002,2003,2004 Sony Corporation
+#
+
+version="1.0"
+progname="`basename $0`"
+
+usage()
+{
+  cat << EOF
+Usage: $progname [OPTIONS]
+Options:
+	[--prefix[=DIR]]
+	[--exec-prefix]
+	[--libs]
+	[--cflags]
+	[--version]
+	[--help]
+EOF
+  exit $1
+}
+
+if test $# -eq 0; then
+  usage 1 1>&2
+fi
+
+prefix=${OPENRSDK_ROOT-/usr/local/OPEN_R_SDK}
+
+while test $# -gt 0; do
+  case "$1" in
+  -*=*) optarg=`echo "$1" | sed 's/[-_a-zA-Z0-9]*=//'` ;;
+  *) optarg= ;;
+  esac
+
+  case "$1" in
+    --prefix=*)
+      prefix=$optarg
+      ;;
+    --prefix)
+      echo_prefix=yes
+      ;;
+    --exec-prefix)
+      echo_exec_prefix=yes
+      ;;
+    --version)
+      echo "$version"
+      ;;
+    --cflags)
+      echo_cflags=yes
+      ;;
+    --libs)
+      echo_libs=yes
+      ;;
+    *)
+      usage 1 1>&2
+      ;;
+  esac
+  shift
+done
+
+case `uname` in
+  Linux)
+    case `uname -m` in
+    i?86)
+      case `gcc --version` in
+      'gcc (GCC) 3.'*)
+        platform="linux-i386-gcc3"
+        ;;
+      *)
+        platform="linux-i386"
+        ;;
+      esac
+      includes="-I$prefix/RP_OPEN_R/include"
+      libs="-L$prefix/RP_OPEN_R/lib/$platform -lObjectComm -lOPENR"
+      ;;
+    *)
+      echo "$progname: Unknown machine type " `uname -m` 1>&2
+      exit 1
+      ;;
+    esac
+    ;;
+  CYGWIN*)
+    platform="cygwin"
+    includes="-I$prefix/RP_OPEN_R/include"
+    libs="-L/usr/local/lib -L$prefix/RP_OPEN_R/lib/$platform -lObjectComm -lOPENR -lcygipc"
+    ;;
+  *)
+    echo "$progname: Unknown OS-type " `uname` 1>&2
+    exit 1
+    ;;
+esac
+
+exec_prefix="$prefix/RP_OPEN_R/lib/$platform"
+
+if test "$echo_prefix" = "yes"; then
+  echo $prefix
+fi
+
+if test "$echo_exec_prefix" = "yes"; then
+  echo $exec_prefix
+fi
+
+if test "$echo_cflags" = "yes"; then
+  echo $includes
+fi
+
+if test "$echo_libs" = "yes"; then
+  echo $libs
+fi

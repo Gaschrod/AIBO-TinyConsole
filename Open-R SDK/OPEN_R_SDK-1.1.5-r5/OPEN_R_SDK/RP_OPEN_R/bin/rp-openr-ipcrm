@@ -1,0 +1,35 @@
+#!/bin/sh
+#
+# Copyright 2002 Sony Corporation
+#
+# rp-openr-ipcrm
+#     Remove all the shared memory and message queue of $USER.
+#
+
+case `uname` in
+    Linux)
+	for i in `ipcs -q | grep $USER | cut -d ' ' -f2 \
+		| sed "s/[^[:digit:]].*$//"`
+	do
+	    ipcrm msg $i
+	done
+	for i in `ipcs -m | grep $USER | cut -d ' ' -f2 \
+		| sed "s/[^[:digit:]].*$//"`
+	do
+	    ipcrm shm $i
+	done
+	;;
+
+    CYGWIN*)
+	for i in `/usr/local/bin/ipcs | grep _shm | cut -d' ' -f 2`
+	do
+	    ipcrm shm $i
+	done
+	for i in `/usr/local/bin/ipcs | grep _msg | cut -d' ' -f 2`
+	do
+	    ipcrm msg $i
+	done
+	;;
+
+    *) echo unknown `uname` ;;
+esac

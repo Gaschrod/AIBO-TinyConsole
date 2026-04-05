@@ -1,0 +1,70 @@
+
+TCPGateway for RoboCup
+                                                               2004-09-01
+
+
+INTRODUCTION
+------------
+
+   This TCPGateway has flow control function for each connection.
+   When TCPGateway's thread receives data in excess of the limit on Linux
+   machine, it sleeps in a certain amount of time. The flow control is
+   operated by each connection.
+   The limit can be set using environment valuable $TCPGW_BAUDRATE_LIMIT.
+   The behavior of baud rate check can be controlled by the following two
+   environment variables: $TCPGW_BAUDRATE_CHECK_SIZE and $TCPGW_BAUDRATE_CHECK_INTERVAL.
+   If $TCPGW_BAUDRATE_LIMIT is 0, the flow control function is disabled.
+
+
+HOW TO USE
+----------
+
+   for sh/bash
+
+   % TCPGW_BAUDRATE_LIMIT=2.0Mbps start-rp-openr
+
+   for csh/tcsh
+
+   % setenv TCPGW_BAUDRATE_LIMIT 2.0Mbps
+   % start-rp-openr
+
+   Hint: This TCPGateway outputs special opening message at stdout.
+
+
+TCPGW_BAUDRATE_LIMIT
+--------------------
+
+   The maximum baud rate allowed for each team.
+
+   [num]   ...  bytes/sec
+   [num]K  ...  kilo bytes/sec
+   [num]M  ...  mega bytes/sec
+   [num]G  ...  giga bytes/sec
+
+   [num]bps  ...  bits/sec
+   [num]Kbps ...  kilo bits/sec
+   [num]Mbps ...  mega bits/sec
+   [num]Gbps ...  giga bits/sec
+
+   default: 0 (Flow control function is disabled.)
+
+
+TCPGW_BAUDRATE_CHECK_INTERVAL
+-----------------------------
+
+   The time interval of baud rate check.
+
+   [num]  ... sec
+
+   default: 1 sec
+
+
+TCPGW_BAUDRATE_CHECK_SIZE
+-------------------------
+
+   The size of data transfer that triggers the baud rate check,
+   even if TCPGW_BAUDRATE_CHECK_INTERVAL has not passed.
+
+   [num]  ... byte
+
+   default: TCPGW_BAUDRATE_LIMIT * TCPGW_BAUDRATE_CHECK_INTERVAL

@@ -1,0 +1,170 @@
+#!/usr/bin/perl
+#
+# mstreeput 
+#
+# Copyright 2002 Sony Corporation
+#
+$|=1;
+
+use Socket;
+$username = "anonymous";
+$password = "anonymous";
+
+#----- set default options -----
+$message        = "\n mstreeput - install MS tree using TinyFTP\n\n"
+                ."  usage:\n       mstreeput [options] addr dir\n"
+                ."  options:\n"
+                ."      -u    : username\n"
+                ."      -p    : password\n"
+                ."      -h    : help\n"
+                ."\n";
+
+use Getopt::Std;
+getopts('u:p:hH');
+die $message if ($opt_h || $opt_H);
+$username = $opt_u if ($opt_u);
+$password = $opt_p if ($opt_p);
+
+
+#----- main -----
+die $message if @ARGV <= 1;
+$hostname = shift(@ARGV);
+$localdir = shift(@ARGV);
+
+chdir($localdir);
+makecopylist(".");
+
+login();
+for ($i = 0; $i < $numoflist; $i++) {
+    print "$LIST[$i]\n";
+    if ($LIST[$i] =~ /\/$/) {
+        ftpmkdir($LIST[$i]);
+    } else {
+        listenData();
+        ftpput($LIST[$i]);
+    }
+}
+logout();
+
+
+#----- sub -----
+sub makecopylist {
+    my $directory = shift(@_);
+    my $numofdir;
+    my @DIRLIST;
+    my $i;
+
+    opendir(DIR, $directory);
+    while ($filename = readdir(DIR)) {
+        next if ($filename =~ /^\.{1,2}$/);
+        $path = "$directory/$filename";
+        $LIST[$numoflist++] = $path if -f $path;
+        if (-d $path) {
+            $LIST[$numoflist++] = "$path/";
+            $DIRLIST[$numofdir++] = $path;
+        }
+    }
+    close(DIR);
+
+    for ($i = 0; $i < $numofdir; $i++) {
+        makecopylist($DIRLIST[$i]);
+    }
+}
+
+sub login {
+    $proto = getprotobyname('tcp');
+    $port = getservbyname('ftp', 'tcp');
+    socket(COMMAND, PF_INET, SOCK_STREAM, $proto)
+        || die "can't creat socket.\n";
+    
+    $sock_addr = pack_sockaddr_in($port, inet_aton($hostname));
+    connect(COMMAND, $sock_addr) || die "cant't connect\n";
+    select(COMMAND); $|=1; select(STDOUT);
+
+    while(<COMMAND>) {
+        die $_ if (/^[^123]\d+\s/);
+        last if (/^\d+\s/);
+    }
+    
+    print COMMAND "USER $username\r\n";
+    while(<COMMAND>) {
+        die $_ if (/^[^123]\d+\s/);
+        last if (/^\d+\s/);
+    }
+    
+    print COMMAND "PASS $password\r\n";
+    while(<COMMAND>) {
+        die $_ if (/^[^123]\d+\s/);
+        last if (/^\d+\s/);
+    }
+}
+
+sub logout {
+    print COMMAND "REBT\r\n";
+    close(COMMAND);
+}
+
+sub listenData {
+    for ($data_port = 5000; $data_port < 65536; $data_port++) {
+        socket(DATA, PF_INET, SOCK_STREAM, $proto)
+            || die "cant't connect\n";
+        
+        if (bind(DATA, pack_sockaddr_in($data_port, INADDR_ANY))) {
+            last;
+        } else {
+            die "can't bind port\n" if ($data_port == 65535);
+        }
+    }
+
+    listen(DATA, 1) || die "listen: $!";
+    $local_sock_addr = getsockname(COMMAND);
+    ($local_port, $local_addr) = unpack_sockaddr_in($local_sock_addr);
+    $local_ip = inet_ntoa($local_addr);
+    $local_ip =~ s/\./,/g;
+
+    printf COMMAND "PORT $local_ip,%d,%d\r\n" 
+        ,$data_port/256,$data_port%256;
+    while(<COMMAND>) {
+        die $_ if (/^[^123]\d+\s/);
+        last if (/^\d+\s/);
+    }
+}
+
+sub ftpmkdir {
+    my $direstory = shift(@_);
+
+    print COMMAND "MKD $direstory\r\n";
+    while(<COMMAND>) {
+        last if (/^\d+\s/);
+    }
+}
+
+sub ftpput {
+    my $filename = shift(@_);
+
+    print COMMAND "TYPE I\r\n";
+    while(<COMMAND>) {
+        die $_ if (/^[^123]\d+\s/);
+        last if (/^\d+\s/);
+    }
+    print COMMAND "STOR $filename\r\n";
+    while(<COMMAND>) {
+        die $_ if (/^[^123]\d+\s/);
+        last if (/^\d+\s/);
+    }
+    accept(IN, DATA);
+    open (FILE, "$filename");
+    binmode(FILE);
+
+    while(read(FILE, $tmp, 1024)) {
+        print IN $tmp;
+    }
+    close(IN);
+    close(DATA);
+    while(<COMMAND>) {
+        die $_ if (/^[^123]\d+\s/);
+        last if (/^\d+\s/);
+    }
+}
+    
+    

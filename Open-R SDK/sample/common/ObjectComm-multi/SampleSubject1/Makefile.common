@@ -1,0 +1,35 @@
+#
+# Copyright 2002,2004 Sony Corporation 
+#
+# Permission to use, copy, modify, and redistribute this software for
+# non-commercial use is hereby granted.
+#
+# This software is provided "as is" without warranty of any kind,
+# either expressed or implied, including but not limited to the
+# implied warranties of fitness for a particular purpose.
+#
+
+# NOTE: This makefile is included by the makefiles in the
+#       subdirectories.  
+
+.PHONY: all install clean
+
+all: sampleSubject1.bin
+
+%.o: %.cc
+	$(CXX) $(CXXFLAGS) -o $@ -c $^
+
+SampleSubjectStub.cc: stub.cfg
+	$(STUBGEN) $^
+
+sampleSubject1.bin: SampleSubjectStub.o SampleSubject.o $(OCF)
+	$(MKBIN) $(MKBINFLAGS) -o $@ $^ $(LIBS)
+	$(STRIP) $@
+
+install: sampleSubject1.bin
+	$(CP) $^ $(INSTALLDIR)/OPEN-R/MW/OBJS/SBJ1.BIN
+
+clean:
+	rm -f *.o *.bin *.elf *.snap.cc
+	rm -f SampleSubjectStub.h SampleSubjectStub.cc def.h entry.h
+	rm -f $(INSTALLDIR)/OPEN-R/MW/OBJS/SBJ1.BIN

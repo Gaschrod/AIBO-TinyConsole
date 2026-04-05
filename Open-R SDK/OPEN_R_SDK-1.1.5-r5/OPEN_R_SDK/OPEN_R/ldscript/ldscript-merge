@@ -1,0 +1,112 @@
+/* 
+ *  ldscript-merge
+ * 
+ *  Copyright 2003 Sony Corporation 
+ */
+
+SECTIONS
+{
+  .SnapShotHdr			0xf0000000 : { *(.SnapShotHdr) }
+  .ObletDependencyDescr		0xf0000000 : { *(.ObletDependencyDescr) }
+  .ObletDependencyDescrList	0xf0000000 : { *(.ObletDependencyDescrList) }
+  .RelEntry			0xf0000000 : { *(.RelEntry) }
+  .RelTextEntry			0xf0000000 : { *(.RelTextEntry) }
+  .RelDataEntry			0xf0000000 : { *(.RelDataEntry) }
+  .Dummy			0xf0000000 (NOLOAD) : { *(.Dummy) }
+  .SingleSegment		0xf0000000 (NOLOAD) : { LONG(0) }
+  . = SIZEOF_HEADERS;
+  .interp : { *(.interp) }
+  .reginfo : { *(.reginfo) }
+  .dynamic : { *(.dynamic) }
+  .hash : { *(.hash) }
+  .dynsym : { *(.dynsym) }
+  .dynstr : { *(.dynstr) }
+  .gnu.version : { *(.gnu.version) }
+  .gnu.version_d : { *(.gnu.version_d) }
+  .gnu.version_r : { *(.gnu.version_r) }
+  .rel.init : { *(.rel.init) }
+  .rela.init : { *(.rela.init) }
+  .rel.text : { *(.rel.text) }
+  .rela.text : { *(.rela.text) }
+  .rel.fini : { *(.rel.fini) }
+  .rela.fini : { *(.rela.fini) }
+  .rel.rodata : { *(.rel.rodata) }
+  .rela.rodata : { *(.rela.rodata) }
+  .rel.data : { *(.rel.data) }
+  .rela.data : { *(.rela.data) }
+  .rel.tdata : { *(.rel.tdata) }
+  .rela.tdata : { *(.rela.tdata) }
+  .rel.tbss : { *(.rel.tbss) }
+  .rela.tbss : { *(.rela.tbss) }
+  .rel.ctors : { *(.rel.ctors) }
+  .rela.ctors : { *(.rela.ctors) }
+  .rel.dtors : { *(.rel.dtors) }
+  .rela.dtors : { *(.rela.dtors) }
+  .rel.got : { *(.rel.got) }
+  .rela.got : { *(.rela.got) }
+  .rel.sdata : { *(.rel.sdata) }
+  .rela.sdata : { *(.rela.sdata) }
+  .rel.sbss : { *(.rel.sbss) }
+  .rela.sbss : { *(.rela.sbss) }
+  .rel.sdata2 : { *(.rel.sdata2) }
+  .rela.sdata2 : { *(.rela.sdata2) }
+  .rel.sbss2 : { *(.rel.sbss2) }
+  .rela.sbss2 : { *(.rela.sbss2) }
+  .rel.bss : { *(.rel.bss) }
+  .rela.bss : { *(.rela.bss) }
+  .rel.plt : { *(.rel.plt) }
+  .rela.plt : { *(.rela.plt) }
+  .init : { *(.init) }
+  .plt : { *(.plt) }
+  .text : { *(.text) }
+  .fini : { *(.fini) }
+  .rodata : { *(.rodata) }
+  .rodata1 : { *(.rodata1) }
+  .sdata2 : { *(.sdata2) }
+  .sbss2 : { *(.sbss2) }
+  .eh_frame_hdr : { *(.eh_frame_hdr) }
+  .preinit_array : { *(.preinit_array) }
+  .init_array : { *(.init_array) }
+  .fini_array : { *(.fini_array) }
+  .data : { *(.data) }
+  .data1 : { *(.data1) }
+  .tdata : { *(.tdata) }
+  .tbss : { *(.tbss) }
+  .eh_frame : { *(.eh_frame) }
+  .gcc_except_table : { *(.gcc_except_table) }
+  .ctors : { *(.ctors) }
+  .dtors : { *(.dtors) }
+  .jcr : { *(.jcr) }
+  .got : { *(.got) }
+  .sdata : { *(.sdata) }
+  .lit8 : { *(.lit8) }
+  .lit4 : { *(.lit4) }
+  .sbss : { *(.sbss) }
+  .bss : { *(.bss) }
+  .stab : { *(.stab) }
+  .stabstr : { *(.stabstr) }
+  .stab.excl : { *(.stab.excl) }
+  .stab.exclstr : { *(.stab.exclstr) }
+  .stab.index : { *(.stab.index) }
+  .stab.indexstr : { *(.stab.indexstr) }
+  .comment : { *(.comment) }
+  .debug : { *(.debug) }
+  .line : { *(.line) }
+  .debug_srcinfo : { *(.debug_srcinfo) }
+  .debug_sfnames : { *(.debug_sfnames) }
+  .debug_aranges : { *(.debug_aranges) }
+  .debug_pubnames : { *(.debug_pubnames) }
+  .debug_info : { *(.debug_info) }
+  .debug_abbrev : { *(.debug_abbrev) }
+  .debug_line : { *(.debug_line) }
+  .debug_frame : { *(.debug_frame) }
+  .debug_str : { *(.debug_str) }
+  .debug_loc : { *(.debug_loc) }
+  .debug_macinfo : { *(.debug_macinfo) }
+  .debug_weaknames : { *(.debug_weaknames) }
+  .debug_funcnames : { *(.debug_funcnames) }
+  .debug_typenames : { *(.debug_typenames) }
+  .debug_varnames : { *(.debug_varnames) }
+  .gptab.sdata : { *(.gptab.sdata) }
+  .gptab.sbss : { *(.gptab.sbss) }
+}

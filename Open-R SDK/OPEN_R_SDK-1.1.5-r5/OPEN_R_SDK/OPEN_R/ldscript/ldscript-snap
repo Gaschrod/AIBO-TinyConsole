@@ -1,0 +1,16 @@
+/* 
+ *  ldscript-snap
+ * 
+ *  Copyright 2002 Sony Corporation 
+ */
+
+SECTIONS
+{
+  .SnapShotHdr			0xf0000000 : { *(.data) }
+  .ObletDependencyDescr		0xf0000000 : { *(.ObletDependencyDescr) }
+  .ObletDependencyDescrList	0xf0000000 : { *(.ObletDependencyDescrList) }
+  .RelEntry			0xf0000000 : { *(.RelEntry) }
+  .RelTextEntry			0xf0000000 : { *(.RelTextEntry) }
+  .RelDataEntry			0xf0000000 : { *(.RelDataEntry) }
+  .Dummy			0xf0000000 (NOLOAD) : { *(*) }
+}

@@ -1,0 +1,6 @@
+#!/bin/sh
+#
+# Copyright 2002 Sony Corporation
+#
+
+gzip -c "$1" > "$2"

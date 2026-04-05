@@ -1,0 +1,35 @@
+#
+# Copyright 2003 Sony Corporation 
+#
+# Permission to use, copy, modify, and redistribute this software for
+# non-commercial use is hereby granted.
+#
+# This software is provided "as is" without warranty of any kind,
+# either expressed or implied, including but not limited to the
+# implied warranties of fitness for a particular purpose.
+#
+
+# NOTE: This makefile is included by the makefiles in the
+#       subdirectories.  
+
+.PHONY: all install clean
+
+all: BattChecker.bin
+
+%.o: %.cc
+	$(CXX) $(CXXFLAGS) -o $@ -c $^
+
+BattCheckerStub.cc: stub.cfg
+	$(STUBGEN) $^
+
+BattChecker.bin: BattCheckerStub.o BattChecker.o $(OCF)
+	$(MKBIN) $(MKBINFLAGS) -o $@ $^ $(LIBS)
+	$(STRIP) $@
+
+install: BattChecker.bin
+	$(CP) $^ $(INSTALLDIR)/OPEN-R/MW/OBJS/BATTCHK.BIN
+
+clean:
+	rm -f *.o *.bin *.elf *.snap.cc
+	rm -f BattCheckerStub.h BattCheckerStub.cc def.h entry.h
+	rm -f $(INSTALLDIR)/OPEN-R/MW/OBJS/BATTCHK.BIN
