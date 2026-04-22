@@ -1,0 +1,3 @@
+[submodule "c20p1305"]
+	path = c20p1305
+	url = git@github.com:wg/c20p1305.git
