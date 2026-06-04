@@ -74,10 +74,8 @@ enum MotionState {
     MSTATE_ADJUSTING,   // one-shot "stay put" frame sent at startup
     MSTATE_GETUP,       // interpolating current pose BROADBASE_POSE
     MSTATE_REST,        // interpolating current pose SLEEPING_POSE
-    MSTATE_WALK_A,      // 
-    MSTATE_WALK_B,      // 
-    MSTATE_WALK_C,      // 
-    MSTATE_WALK_D,      // 
+    MSTATE_WALK_A,      // walk phase A: RF+LR diagonal swing
+    MSTATE_WALK_B,      // walk phase B: LF+RR diagonal swing
     MSTATE_TO_BASE      // returning to broadbase after stop
 };
 
@@ -140,8 +138,7 @@ private:
     // Step counts (each step = one ocommandMAX_FRAMES block = 128 ms).
     static const int GET_UP_COUNTER     = 24; // 3 s to stand up
     static const int REST_COUNTER       = 24; // 3 s to lie down
-    static const int WALK_SWING_COUNTER = 6;  // 768 ms to swing leg forward/backward
-    static const int WALK_DROP_COUNTER  = 2;  // 256 ms to drop foot to ground ("quickly")
+    static const int WALK_PHASE_COUNTER = 6;  // 768 ms per trot half-cycle
     static const int STOP_COUNTER       = 8;  // 1 s to return to broadbase
 
     // Servo gain values from ERS-7 Model Information (standard gains).

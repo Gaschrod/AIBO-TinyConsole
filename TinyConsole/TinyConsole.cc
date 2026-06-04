@@ -93,75 +93,53 @@ static const double SLEEPING_POSE[12] = {
 // ----------------------------------------------------------------
 //  Forward trot diagonal pairs (RF+LR) and (LF+RR).
 //
-//  Need to update this comment: not up-to-date
+//  Phase A: RF and LR are the SWING legs (lifted, J2 retracted).
+//           LF and RR are the STANCE legs (grounded, J2 near max).
+//
+//  Phase B: LF and RR become the swing legs; RF and LR become stance.
 //
 //  Each phase interpolates from the previous pose to the new target;
 //  the robot body net advances forward because the swing legs plant
 //  further forward (higher J2) when they land at the broadbase
 //  position between phases.
 //
+//  Tuning knobs:
+//    Swing  J2 (72 / 52): decrease to lengthen stride, min ~60 / 40
+//    Lift   J3 (55 / 50): increase for higher foot clearance
+//    Stance J2 (86 / 68): keep close to broadbase max (88 / 70)
 // ----------------------------------------------------------------
 
 static const double WALK_FWD_A[12] = {
-     40, 4, 0,   // RF  swing fw
-      0, 4, 25,   // LF  propel bw
-      0, 4, 25,   // RR  propel bw
-     40, 4, 0,   // LR  swing fw
+     0, 4, 55,   // RF  swing : J2 retracted + J3 lifted
+     0, 4, 24,   // LF  stance: J2 extended,  J3 low
+     0, 4, 50,   // RR  swing : J2 retracted + J3 lifted
+     0, 4, 24,   // LR  stance: J2 extended,  J3 low
 };
 
 static const double WALK_FWD_B[12] = {
-     0, 4, 25,   // RF  touchdown
-     0, 4, 25,   // LF  hold bw
-     0, 4, 25,   // RR  hold bw
-     0, 4, 25,   // LR  touchdown
-};
-
-static const double WALK_FWD_C[12] = {
-      0, 4, 25,   // RF  propel bw
-     40, 4, 0,   // LF  swing fw
-     40, 4, 0,   // RR  swing fw
-      0, 4, 25,   // LR  propel bw
-};
-
-static const double WALK_FWD_D[12] = {
-     0, 4, 25,   // RF  hold bw
-     0, 4, 25,   // LF  touchdown
-     0, 4, 25,   // RR  touchdown
-     0, 4, 25,   // LR  hold bw
+     0, 4, 24,   // RF  stance
+     0, 4, 55,   // LF  swing
+     0, 4, 24,   // RR  stance
+     0, 4, 50,   // LR  swing
 };
 
 // ----------------------------------------------------------------
-//  Backward trot roles reversed: 
-// 
-//  Need to update this comment: not up-to-date
+//  Backward trot roles reversed: swing legs start extended (J2
+//  near max) and plant further back, pulling the body rearward.
 // ----------------------------------------------------------------
 
 static const double WALK_BACK_A[12] = {
-     40, 4, 0,   // RF swing bw
-      0, 4, 25,   // LF propel fw
-      0, 4, 25,   // RR propel fw
-     10, 4, 0,   // LR swing bw
+     0, 4, 55,   // RF  swing : J2 extended  + J3 lifted
+     0, 4, 24,   // LF  stance: J2 retracted, J3 low
+     0, 4, 50,   // RR  swing : J2 extended  + J3 lifted
+     0, 4, 24,   // LR  stance: J2 retracted, J3 low
 };
 
 static const double WALK_BACK_B[12] = {
-     0, 4, 25,   // RF touchdown
-     0, 4, 25,   // LF hold fw
-     0, 4, 25,   // RR hold fw
-     0, 4, 25,   // LR touchdown
-};
-
-static const double WALK_BACK_C[12] = {
-      0, 4, 25,   // RF propel fw
-     40, 4, 0,   // LF swing bw
-     40, 4, 0,   // RR swing bw
-      0, 4, 25,   // LR propel fw
-};
-
-static const double WALK_BACK_D[12] = {
-     0, 4, 25,   // RF hold fw
-     0, 4, 25,   // LF touchdown
-     0, 4, 25,   // RR touchdown
-     0, 4, 25,   // LR hold fw
+     110, 4, 24,   // RF  stance
+     110, 4, 55,   // LF  swing
+    -110, 4, 24,   // RR  stance
+    -110, 4, 50,   // LR  swing
 };
 
 // ================================================================
@@ -336,44 +314,23 @@ TinyConsole::Ready(const OReadyEvent& event)
                 motionState_ = MSTATE_IDLE;
             break;
 
-        // Walk phases alternate: A B C D  until interrupted.
+        // Walk phases alternate: A  B A B  until interrupted.
         case MSTATE_WALK_A:
-            if (AdvanceInterpolation(WALK_SWING_COUNTER) == MOVING_FINISH) {
+            if (AdvanceInterpolation(WALK_PHASE_COUNTER) == MOVING_FINISH) {
                 const double* from = walkForward_ ? WALK_FWD_A  : WALK_BACK_A;
                 const double* to   = walkForward_ ? WALK_FWD_B  : WALK_BACK_B;
-                SetupInterpolation(from, to, WALK_DROP_COUNTER);
+                SetupInterpolation(from, to, WALK_PHASE_COUNTER);
                 motionState_ = MSTATE_WALK_B;
             }
             break;
 
         case MSTATE_WALK_B:
-            if (AdvanceInterpolation(WALK_DROP_COUNTER) == MOVING_FINISH) {
+            if (AdvanceInterpolation(WALK_PHASE_COUNTER) == MOVING_FINISH) {
                 const double* from = walkForward_ ? WALK_FWD_B  : WALK_BACK_B;
-                const double* to   = walkForward_ ? WALK_FWD_C  : WALK_BACK_C;
-                SetupInterpolation(from, to, WALK_SWING_COUNTER);
-                motionState_ = MSTATE_WALK_C;
-            }
-            break;
-
-        case MSTATE_WALK_C:
-            if (AdvanceInterpolation(WALK_SWING_COUNTER) == MOVING_FINISH) {
-                const double* from = walkForward_ ? WALK_FWD_C  : WALK_BACK_C;
-                const double* to   = walkForward_ ? WALK_FWD_D  : WALK_BACK_D;
-                SetupInterpolation(from, to, WALK_DROP_COUNTER);
-                motionState_ = MSTATE_WALK_D;
-            }
-            break;
-
-        case MSTATE_WALK_D:
-            if (AdvanceInterpolation(WALK_DROP_COUNTER) == MOVING_FINISH) {
-                const double* from = walkForward_ ? WALK_FWD_D  : WALK_BACK_D;
                 const double* to   = walkForward_ ? WALK_FWD_A  : WALK_BACK_A;
-                SetupInterpolation(from, to, WALK_SWING_COUNTER);
+                SetupInterpolation(from, to, WALK_PHASE_COUNTER);
                 motionState_ = MSTATE_WALK_A;
             }
-            break;
-
-
             break;
 
         case MSTATE_TO_BASE:
@@ -966,20 +923,20 @@ TinyConsole::BeginMotion(MotionCmd cmd)
             motionState_ = MSTATE_REST;
             break;
 
-		case MCMD_FORWARD:
+        case MCMD_FORWARD:
             OSYSPRINT(("TinyConsole: FORWARD walk\n"));
             walkForward_ = true;
-            SetupInterpolation(cur, WALK_FWD_A, WALK_SWING_COUNTER); // UPDATED COUNTER
+            SetupInterpolation(cur, WALK_FWD_A, WALK_PHASE_COUNTER);
             motionState_ = MSTATE_WALK_A;
             break;
 
         case MCMD_BACK:
             OSYSPRINT(("TinyConsole: BACK walk\n"));
             walkForward_ = false;
-            SetupInterpolation(cur, WALK_BACK_A, WALK_SWING_COUNTER); // UPDATED COUNTER
+            SetupInterpolation(cur, WALK_BACK_A, WALK_PHASE_COUNTER);
             motionState_ = MSTATE_WALK_A;
             break;
-            
+
         case MCMD_STOP:
             OSYSPRINT(("TinyConsole: STOP\n"));
             if (motionState_ != MSTATE_IDLE &&
