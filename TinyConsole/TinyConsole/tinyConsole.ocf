@@ -1,0 +1,2 @@
+object tinyConsole 8192 65536 128 cache tlb user
+
