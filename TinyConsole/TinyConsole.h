@@ -71,12 +71,21 @@ enum MotionCmd {
 // Internal motion state machine state.
 enum MotionState {
     MSTATE_IDLE,        // no motion; Ready() is not being called
-    MSTATE_ADJUSTING,   // one-shot "stay put" frame sent at startup
-    MSTATE_GETUP,       // interpolating current pose BROADBASE_POSE
-    MSTATE_REST,        // interpolating current pose SLEEPING_POSE
-    MSTATE_WALK_A,      // walk phase A: RF+LR diagonal swing
-    MSTATE_WALK_B,      // walk phase B: LF+RR diagonal swing
-    MSTATE_TO_BASE      // returning to broadbase after stop
+    MSTATE_STARTUP,
+    MSTATE_GETUP_PREP,   // -> RISING_POSE_0
+    MSTATE_GETUP_PREP_1, // RISING_POSE_0 -> RISING_POSE_1
+    MSTATE_GETUP_PREP_2, // RISING_POSE_1 -> RISING_POSE_2
+    MSTATE_GETUP_PREP_3, // RISING_POSE_2 -> RISING_POSE_3
+    MSTATE_GETUP,        // RISING_POSE_3 -> BROADBASE_POSE
+    MSTATE_PREPA_REST_0,   // Intermediary state before SLEEPING_POSE
+    MSTATE_PREPA_REST_1,
+    MSTATE_PREPA_REST_2, 
+    MSTATE_REST,         // SLEEPING_POSE_1 (final)
+    MSTATE_WALK_A,       // 
+    MSTATE_WALK_B,       // 
+    MSTATE_WALK_C,       // 
+    MSTATE_WALK_D,       // 
+    MSTATE_TO_BASE       // returning to broadbase after stop
 };
 
 // ================================================================
@@ -136,9 +145,11 @@ private:
     // ===============================================================
 
     // Step counts (each step = one ocommandMAX_FRAMES block = 128 ms).
-    static const int GET_UP_COUNTER     = 24; // 3 s to stand up
-    static const int REST_COUNTER       = 24; // 3 s to lie down
-    static const int WALK_PHASE_COUNTER = 6;  // 768 ms per trot half-cycle
+    static const int STARTUP_COUNTER    = 24;
+    static const int GETUP_COUNTER     = 6;  // 1 s to stand up
+    static const int REST_COUNTER       = 12; // 2 s to lie down
+    static const int WALK_SWING_COUNTER = 24; // 3 s to swing leg forward/backward
+    static const int WALK_DROP_COUNTER  = 8;  // 1 s to drop foot to ground ("quickly")
     static const int STOP_COUNTER       = 8;  // 1 s to return to broadbase
 
     // Servo gain values from ERS-7 Model Information (standard gains).

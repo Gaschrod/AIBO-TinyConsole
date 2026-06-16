@@ -74,72 +74,160 @@ static const char* const JOINT_LOCATOR[TinyConsole::NUM_JOINTS] = {
 //    All   J2:10  88     All   J3: 25  122
 // ================================================================
 
-// Broadbase upright, legs spread in stable stance.
-static const double BROADBASE_POSE[12] = {
-     0, 4, 30,   // RF
-     0, 4, 30,   // LF
-     0, 4, 30,   // RR
-     0, 4, 30,   // LR
+// Sleeping body low, rear knees tucked (J3=122 fully bent).
+
+static const double SLEEPING_POSE_0[12] = {
+      10,  1,  30,  // Front
+	  10,  1,  30,  // Front
+	 -35,  5,  60, // Rear
+	 -35,  5,  60, // Rear
+}; // OK good
+
+static const double SLEEPING_POSE_1[12] = {
+      10,  1,   45,  // Front
+	  10,  1,   45,  // Front
+     -45,  5,   70,  // RR
+     -45,  5,   70,  // RR
+}; // OK good
+
+static const double SLEEPING_POSE_2[12] = {
+      10,  1,   80,  // Front
+	  10,  1,   80,  // Front
+     -65,  5,   80,  // RR
+     -65,  5,   80,  // RR
+     //  70,  1,  -15,  // RF
+     //  70,  1,  -15,  // LF
+     // -120,  5,  120,  // RR
+     // -120,  5,  120,  // LR
 };
 
-// Sleeping body low, rear knees tucked (J3=122 fully bent).
-static const double SLEEPING_POSE[12] = {
-      59,  0,  30,  // RF
-      59,  0,  30,  // LF
-    -110,  15, 122,  // RR
-    -110,  15, 122,  // LR
+static const double SLEEPING_POSE_3[12] = {
+      75,  1,   10,  // Front
+	  75,  1,   10,  // Front
+    -125,  5,   120,  // RR
+    -125,  5,   120,  // RR
 };
+// 60, 1, -10
+// 60, 1, -10
+// -120, 10, 120
+// -120, 10, 120
+
+static const double RISING_POSE_0[12] = {
+	  15,  1, -20,  // Front
+	  15,  1, -20,  // F
+	 -95,  10, 120, // Rear
+	 -95,  10, 120, // R
+};
+
+static const double RISING_POSE_1[12] = {
+	  15,  1, 60,  // Front
+	  15,  1, 60,  // Front
+	 -75, 30, 120, // Rear
+	 -75, 30, 120, // Rear
+};
+
+static const double RISING_POSE_2[12] = {
+	  15,  1, 50,   // Front
+	  15,  1, 50,   // Front
+	 -55,  30, 110, // Rear
+	 -55,  30, 110, // Rear
+};
+
+static const double RISING_POSE_3[12] = {
+	  15,  1, 50,  // Front
+	  15,  1, 50,  // Front
+	 -45,  5, 80, // Rear
+	 -45,  5, 80, // Rear
+};
+
+
+// Broadbase upright, legs spread in stable stance.
+// To be modified: same as rising for debug purpose
+static const double BROADBASE_POSE[12] = {
+	   5,  1, 20,  // Front
+	   5,  1, 20,  // Front
+	 -15,  5, 40, // Rear
+	 -15,  5, 40, // Rear
+};
+
+// Other option to try: J1 "large" rotation with J3 closing as much as possible while front legs get "as flat as possible" then gradually push on them
+
+// Will need a final phase to "push" on rear leg and finally get up
+// 1. Push on rear legs to get up -> need to be 1 movement by itself as "heavy" push
+// 2. Adjust position ("straight" legs)
 
 // ----------------------------------------------------------------
 //  Forward trot diagonal pairs (RF+LR) and (LF+RR).
 //
-//  Phase A: RF and LR are the SWING legs (lifted, J2 retracted).
-//           LF and RR are the STANCE legs (grounded, J2 near max).
-//
-//  Phase B: LF and RR become the swing legs; RF and LR become stance.
+//  Need to update this comment: not up-to-date
 //
 //  Each phase interpolates from the previous pose to the new target;
 //  the robot body net advances forward because the swing legs plant
 //  further forward (higher J2) when they land at the broadbase
 //  position between phases.
 //
-//  Tuning knobs:
-//    Swing  J2 (72 / 52): decrease to lengthen stride, min ~60 / 40
-//    Lift   J3 (55 / 50): increase for higher foot clearance
-//    Stance J2 (86 / 68): keep close to broadbase max (88 / 70)
 // ----------------------------------------------------------------
 
 static const double WALK_FWD_A[12] = {
-     0, 4, 55,   // RF  swing : J2 retracted + J3 lifted
-     0, 4, 24,   // LF  stance: J2 extended,  J3 low
-     0, 4, 50,   // RR  swing : J2 retracted + J3 lifted
-     0, 4, 24,   // LR  stance: J2 extended,  J3 low
+      40, 2, -20, // Front right -> move
+       0, 2, 0,   // Front left -> stays
+       0, 2, 0,   // Rear right -> stays
+       0, 2, 0,   // Rear left -> stays
 };
 
 static const double WALK_FWD_B[12] = {
-     0, 4, 24,   // RF  stance
-     0, 4, 55,   // LF  swing
-     0, 4, 24,   // RR  stance
-     0, 4, 50,   // LR  swing
+     40, 2, -20,   // RF  -> stays advanced
+      0, 2, 0,   // LF  -> stays
+    -40, 2, 20,   // RR -> move
+      0, 2,  0,   // LR -> stays
+};
+
+static const double WALK_FWD_C[12] = {
+       0, 2, 0,   // RF -> goes back
+      40, 2, 0,   // LF -> move 
+     -40, 2, 20,  // RR -> stays
+       0, 2, 0,   // LR -> stays
+};
+
+static const double WALK_FWD_D[12] = {
+      0, 2, 0,   // Front left leg
+     40, 2, 3,   // Front right leg -> stays
+      0, 2, 0,   // RR -> goes back
+    -40, 2, 20,   // LR -> move
 };
 
 // ----------------------------------------------------------------
-//  Backward trot roles reversed: swing legs start extended (J2
-//  near max) and plant further back, pulling the body rearward.
+//  Backward trot roles reversed: 
+// 
+//  Need to update this comment: not up-to-date
 // ----------------------------------------------------------------
 
 static const double WALK_BACK_A[12] = {
-     0, 4, 55,   // RF  swing : J2 extended  + J3 lifted
-     0, 4, 24,   // LF  stance: J2 retracted, J3 low
-     0, 4, 50,   // RR  swing : J2 extended  + J3 lifted
-     0, 4, 24,   // LR  stance: J2 retracted, J3 low
+     40, 4, 0,   // RF swing bw
+      0, 4, 25,   // LF propel fw
+      0, 4, 25,   // RR propel fw
+     10, 4, 0,   // LR swing bw
 };
 
 static const double WALK_BACK_B[12] = {
-     110, 4, 24,   // RF  stance
-     110, 4, 55,   // LF  swing
-    -110, 4, 24,   // RR  stance
-    -110, 4, 50,   // LR  swing
+     0, 4, 25,   // RF touchdown
+     0, 4, 25,   // LF hold fw
+     0, 4, 25,   // RR hold fw
+     0, 4, 25,   // LR touchdown
+};
+
+static const double WALK_BACK_C[12] = {
+      0, 4, 25,   // RF propel fw
+     40, 4, 0,   // LF swing bw
+     40, 4, 0,   // RR swing bw
+      0, 4, 25,   // LR propel fw
+};
+
+static const double WALK_BACK_D[12] = {
+     0, 4, 25,   // RF hold fw
+     0, 4, 25,   // LF touchdown
+     0, 4, 25,   // RR touchdown
+     0, 4, 25,   // LR hold fw
 };
 
 // ================================================================
@@ -215,29 +303,16 @@ TinyConsole::DoStart(const OSystemEvent& event)
     conn_.recvBuffer.Map();
     conn_.recvData = (byte*)conn_.recvBuffer.GetAddress();
     
-
-
-    //if (subject[sbjMove]->IsReady() == true) {
-    //    double cur[NUM_JOINTS];
-    //    ReadCurrentPose(cur);
-    //    SetupInterpolation(cur, cur, 1);
-
-    //    RCRegion* rgn = FindFreeRegion();
-    //    if (rgn) { // Added null check for safety
-    //        for (int i = 0; i < NUM_JOINTS; i++)
-    //            SetJointValue(rgn, i, cur[i], cur[i]);
-    //        subject[sbjMove]->SetData(rgn);
-    //        subject[sbjMove]->NotifyObservers();
-    //    }
-    //    motionState_ = MSTATE_ADJUSTING;
-    //} else {
-    //    motionState_ = MSTATE_IDLE;
-    //}
     if (subject[sbjMove]->IsReady() == true) {
-		SetJointGain();
-	}
-    
-    motionState_ = MSTATE_IDLE;
+        double cur[NUM_JOINTS];
+        ReadCurrentPose(cur);
+        SetupInterpolation(cur, SLEEPING_POSE_3, STARTUP_COUNTER);
+        SetJointGain(); // Or should be after SetupInterpolation
+		motionState_ = MSTATE_STARTUP;
+		AdvanceInterpolation(STARTUP_COUNTER);
+    } else {
+        motionState_ = MSTATE_IDLE;
+    }
 
     ENABLE_ALL_SUBJECT;
     ASSERT_READY_TO_ALL_OBSERVER;
@@ -294,43 +369,115 @@ TinyConsole::Ready(const OReadyEvent& event)
     // ---- Advance the current motion phase -----------------------------
     switch (motionState_) {
 
+		case MSTATE_STARTUP:
+			if (AdvanceInterpolation(STARTUP_COUNTER) == MOVING_FINISH)
+				motionState_ = MSTATE_IDLE;
+			break;
+
         case MSTATE_IDLE:
             // Nothing to do; we won't get another Ready() until
             // TriggerReady() sends a frame for the next command.
             break;
 
-        case MSTATE_ADJUSTING:
-            // The startup "stay put" frame was consumed; go idle.
-            motionState_ = MSTATE_IDLE;
-            break;
+        case MSTATE_GETUP_PREP:
+        	if (AdvanceInterpolation(GETUP_COUNTER) == MOVING_FINISH) {
+        		SetupInterpolation(RISING_POSE_0, RISING_POSE_1, GETUP_COUNTER);
+        		motionState_ = MSTATE_GETUP_PREP_1;
+			}
+			break;
+			
+		case MSTATE_GETUP_PREP_1:
+        	if (AdvanceInterpolation(GETUP_COUNTER) == MOVING_FINISH) {
+        		SetupInterpolation(RISING_POSE_1, RISING_POSE_2, GETUP_COUNTER);
+        		motionState_ = MSTATE_GETUP_PREP_2;
+			}
+			break;
+
+		case MSTATE_GETUP_PREP_2:
+        	if (AdvanceInterpolation(GETUP_COUNTER) == MOVING_FINISH) {
+        		SetupInterpolation(RISING_POSE_2, RISING_POSE_3, GETUP_COUNTER);
+        		motionState_ = MSTATE_GETUP_PREP_3;
+			}
+			break;
+
+		case MSTATE_GETUP_PREP_3:
+        	if (AdvanceInterpolation(GETUP_COUNTER) == MOVING_FINISH) {
+        		SetupInterpolation(RISING_POSE_3, BROADBASE_POSE, GETUP_COUNTER);
+        		motionState_ = MSTATE_GETUP;
+			}
+			break;
+		
 
         case MSTATE_GETUP:
-            if (AdvanceInterpolation(GET_UP_COUNTER) == MOVING_FINISH)
+            if (AdvanceInterpolation(GETUP_COUNTER) == MOVING_FINISH)
                 motionState_ = MSTATE_IDLE;
             break;
+	
+		case MSTATE_PREPA_REST_0:
+			if (AdvanceInterpolation(REST_COUNTER) == MOVING_FINISH) {
+        		SetupInterpolation(SLEEPING_POSE_0, SLEEPING_POSE_1, REST_COUNTER);
+        		motionState_ = MSTATE_PREPA_REST_1;
+			}
+			break;
 
+		case MSTATE_PREPA_REST_1:
+			if (AdvanceInterpolation(REST_COUNTER) == MOVING_FINISH) {
+        		SetupInterpolation(SLEEPING_POSE_1, SLEEPING_POSE_2, REST_COUNTER);
+        		motionState_ = MSTATE_PREPA_REST_2;
+			}
+			break;
+		
+		case MSTATE_PREPA_REST_2:
+			if (AdvanceInterpolation(REST_COUNTER) == MOVING_FINISH) {
+        		SetupInterpolation(SLEEPING_POSE_2, SLEEPING_POSE_3, REST_COUNTER);
+        		motionState_ = MSTATE_REST;
+			}
+			break;
+
+		
         case MSTATE_REST:
             if (AdvanceInterpolation(REST_COUNTER) == MOVING_FINISH)
                 motionState_ = MSTATE_IDLE;
             break;
 
-        // Walk phases alternate: A  B A B  until interrupted.
+        // Walk phases alternate: A B C D  until interrupted.
         case MSTATE_WALK_A:
-            if (AdvanceInterpolation(WALK_PHASE_COUNTER) == MOVING_FINISH) {
+            if (AdvanceInterpolation(WALK_SWING_COUNTER) == MOVING_FINISH) {
                 const double* from = walkForward_ ? WALK_FWD_A  : WALK_BACK_A;
                 const double* to   = walkForward_ ? WALK_FWD_B  : WALK_BACK_B;
-                SetupInterpolation(from, to, WALK_PHASE_COUNTER);
+                SetupInterpolation(from, to, WALK_DROP_COUNTER);
                 motionState_ = MSTATE_WALK_B;
             }
             break;
 
         case MSTATE_WALK_B:
-            if (AdvanceInterpolation(WALK_PHASE_COUNTER) == MOVING_FINISH) {
+            if (AdvanceInterpolation(WALK_DROP_COUNTER) == MOVING_FINISH) {
                 const double* from = walkForward_ ? WALK_FWD_B  : WALK_BACK_B;
+                const double* to   = walkForward_ ? WALK_FWD_C  : WALK_BACK_C;
+                SetupInterpolation(from, to, WALK_SWING_COUNTER);
+                motionState_ = MSTATE_WALK_C;
+            }
+            break;
+
+        case MSTATE_WALK_C:
+            if (AdvanceInterpolation(WALK_SWING_COUNTER) == MOVING_FINISH) {
+                const double* from = walkForward_ ? WALK_FWD_C  : WALK_BACK_C;
+                const double* to   = walkForward_ ? WALK_FWD_D  : WALK_BACK_D;
+                SetupInterpolation(from, to, WALK_DROP_COUNTER);
+                motionState_ = MSTATE_WALK_D;
+            }
+            break;
+
+        case MSTATE_WALK_D:
+            if (AdvanceInterpolation(WALK_DROP_COUNTER) == MOVING_FINISH) {
+                const double* from = walkForward_ ? WALK_FWD_D  : WALK_BACK_D;
                 const double* to   = walkForward_ ? WALK_FWD_A  : WALK_BACK_A;
-                SetupInterpolation(from, to, WALK_PHASE_COUNTER);
+                SetupInterpolation(from, to, WALK_SWING_COUNTER);
                 motionState_ = MSTATE_WALK_A;
             }
+            break;
+
+
             break;
 
         case MSTATE_TO_BASE:
@@ -913,30 +1060,30 @@ TinyConsole::BeginMotion(MotionCmd cmd)
 
         case MCMD_GETUP:
             OSYSPRINT(("TinyConsole: GET_UP\n"));
-            SetupInterpolation(cur, BROADBASE_POSE, GET_UP_COUNTER);
-            motionState_ = MSTATE_GETUP;
+            SetupInterpolation(cur, RISING_POSE_0, GETUP_COUNTER);
+            motionState_ = MSTATE_GETUP_PREP;
             break;
 
         case MCMD_REST:
             OSYSPRINT(("TinyConsole: REST\n"));
-            SetupInterpolation(cur, SLEEPING_POSE, REST_COUNTER);
-            motionState_ = MSTATE_REST;
+            SetupInterpolation(cur, SLEEPING_POSE_0, REST_COUNTER);
+            motionState_ = MSTATE_PREPA_REST_1;
             break;
 
-        case MCMD_FORWARD:
+		case MCMD_FORWARD:
             OSYSPRINT(("TinyConsole: FORWARD walk\n"));
             walkForward_ = true;
-            SetupInterpolation(cur, WALK_FWD_A, WALK_PHASE_COUNTER);
+            SetupInterpolation(cur, WALK_FWD_A, WALK_SWING_COUNTER); // UPDATED COUNTER
             motionState_ = MSTATE_WALK_A;
             break;
 
         case MCMD_BACK:
             OSYSPRINT(("TinyConsole: BACK walk\n"));
             walkForward_ = false;
-            SetupInterpolation(cur, WALK_BACK_A, WALK_PHASE_COUNTER);
+            SetupInterpolation(cur, WALK_BACK_A, WALK_SWING_COUNTER); // UPDATED COUNTER
             motionState_ = MSTATE_WALK_A;
             break;
-
+            
         case MCMD_STOP:
             OSYSPRINT(("TinyConsole: STOP\n"));
             if (motionState_ != MSTATE_IDLE &&
