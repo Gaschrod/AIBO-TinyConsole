@@ -134,7 +134,7 @@ private:
     //  AEAD helpers
     // ================================================================
 
-    void AdvanceNonce  (uint32_t& counter);
+    void AdvanceNonce  (uint32_t& counter, bool isTx);
     bool AeadEncrypt   (const byte* plaintext, int ptLen,
                         byte* frameOut, int* frameLen);
     bool AeadDecrypt   (const byte* frame, int frameLen,
@@ -146,10 +146,10 @@ private:
 
     // Step counts (each step = one ocommandMAX_FRAMES block = 128 ms).
     static const int STARTUP_COUNTER    = 24;
-    static const int GETUP_COUNTER     = 6;  // 1 s to stand up
+    static const int GETUP_COUNTER     =  18; // 3s -> reduce back to 6 once finished
     static const int REST_COUNTER       = 12; // 2 s to lie down
-    static const int WALK_SWING_COUNTER = 24; // 3 s to swing leg forward/backward
-    static const int WALK_DROP_COUNTER  = 8;  // 1 s to drop foot to ground ("quickly")
+    static const int WALK_SWING_COUNTER = 6; // 3 s to swing leg forward/backward
+    static const int WALK_DROP_COUNTER  = 6;  // 1 s to drop foot to ground ("quickly")
     static const int STOP_COUNTER       = 8;  // 1 s to return to broadbase
 
     // Servo gain values from ERS-7 Model Information (standard gains).

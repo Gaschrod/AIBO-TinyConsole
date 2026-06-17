@@ -52,14 +52,16 @@ static const char* const JOINT_LOCATOR[TinyConsole::NUM_JOINTS] = {
     "PRM:/r2/c1/c2-Joint2:22",      // LF J2
     "PRM:/r2/c1/c2/c3-Joint2:23",   // LF J3
 
-    "PRM:/r5/c1-Joint2:51",         // RR J1
-    "PRM:/r5/c1/c2-Joint2:52",      // RR J2
-    "PRM:/r5/c1/c2/c3-Joint2:53",   // RR J3
+    "PRM:/r3/c1-Joint2:31",         // RR J1
+    "PRM:/r3/c1/c2-Joint2:32",      // RR J2
+    "PRM:/r3/c1/c2/c3-Joint2:33",   // RR J3
 
-    "PRM:/r3/c1-Joint2:31",         // LR J1
-    "PRM:/r3/c1/c2-Joint2:32",      // LR J2
-    "PRM:/r3/c1/c2/c3-Joint2:33",   // LR J3
+    "PRM:/r5/c1-Joint2:51",         // LR J1
+    "PRM:/r5/c1/c2-Joint2:52",      // LR J2
+    "PRM:/r5/c1/c2/c3-Joint2:53",   // LR J3
 };
+
+
 
 // ================================================================
 //  Pose tables  (all angles in degrees)
@@ -81,63 +83,65 @@ static const double SLEEPING_POSE_0[12] = {
 	  10,  1,  30,  // Front
 	 -35,  5,  60, // Rear
 	 -35,  5,  60, // Rear
-}; // OK good
+};
 
 static const double SLEEPING_POSE_1[12] = {
       10,  1,   45,  // Front
 	  10,  1,   45,  // Front
      -45,  5,   70,  // RR
      -45,  5,   70,  // RR
-}; // OK good
+};
 
 static const double SLEEPING_POSE_2[12] = {
       10,  1,   80,  // Front
 	  10,  1,   80,  // Front
      -65,  5,   80,  // RR
      -65,  5,   80,  // RR
-     //  70,  1,  -15,  // RF
-     //  70,  1,  -15,  // LF
-     // -120,  5,  120,  // RR
-     // -120,  5,  120,  // LR
 };
 
 static const double SLEEPING_POSE_3[12] = {
-      75,  1,   10,  // Front
-	  75,  1,   10,  // Front
+      80,  1,   -25,  // Front -> watch out for unecessary tension on J1
+	  80,  1,   -25,  // Front -> //
     -125,  5,   120,  // RR
     -125,  5,   120,  // RR
 };
-// 60, 1, -10
-// 60, 1, -10
-// -120, 10, 120
-// -120, 10, 120
+
+
 
 static const double RISING_POSE_0[12] = {
-	  15,  1, -20,  // Front
-	  15,  1, -20,  // F
-	 -95,  10, 120, // Rear
-	 -95,  10, 120, // R
-};
+	  10,  1, -25,  // Front
+	  10,  1, -25,  // F
+	 -95,  5, 120, // Rear
+	 -95,  5, 120, // R
+}; // Rise up by pushing front legs /-|
 
 static const double RISING_POSE_1[12] = {
-	  15,  1, 60,  // Front
-	  15,  1, 60,  // Front
-	 -75, 30, 120, // Rear
-	 -75, 30, 120, // Rear
-};
+	  15,  1, 80,  // Front
+	  15,  1, 80,  // Front
+	 -95,  5, 120, // Rear
+	 -95,  5, 120, // Rear
+}; 
 
 static const double RISING_POSE_2[12] = {
-	  15,  1, 50,   // Front
-	  15,  1, 50,   // Front
-	 -55,  30, 110, // Rear
-	 -55,  30, 110, // Rear
+	15,  1, 80,  // Front
+	  15,  1, 80,  // Front
+	 -75,  5, 120, // Rear
+	 -75,  5, 120, // Rear
+	  //15,  1, 50,   // Front
+	  //15,  1, 50,   // Front
+	 //-55,  5, 110, // Rear
+	 //-55,  5, 110, // Rear
 };
 
 static const double RISING_POSE_3[12] = {
-	  15,  1, 50,  // Front
-	  15,  1, 50,  // Front
-	 -45,  5, 80, // Rear
-	 -45,  5, 80, // Rear
+	15,  1, 80,  // Front
+	  15,  1, 80,  // Front
+	 -75,  5, 120, // Rear
+	 -75,  5, 120, // Rear
+	  //15,  1, 50,  // Front
+	  //15,  1, 50,  // Front
+	 //-45,  5, 80, // Rear
+	 //-45,  5, 80, // Rear
 };
 
 
@@ -169,31 +173,31 @@ static const double BROADBASE_POSE[12] = {
 // ----------------------------------------------------------------
 
 static const double WALK_FWD_A[12] = {
-      40, 2, -20, // Front right -> move
-       0, 2, 0,   // Front left -> stays
-       0, 2, 0,   // Rear right -> stays
-       0, 2, 0,   // Rear left -> stays
+     40, 5, -5, // Front right -> moves
+      5, 1, 20, // Front left
+    -20, 5, 30, // Rear right -> finish (previous movement) going back
+    -15, 5, 40, // Rear left
 };
 
 static const double WALK_FWD_B[12] = {
-     40, 2, -20,   // RF  -> stays advanced
-      0, 2, 0,   // LF  -> stays
-    -40, 2, 20,   // RR -> move
-      0, 2,  0,   // LR -> stays
+     40, 5, -5, // Front right -> moves
+      5, 1, 20, // Front left
+    -40, 5, 60, // Rear left -> moves
+    -15, 5, 40, // Rear right
 };
 
 static const double WALK_FWD_C[12] = {
-       0, 2, 0,   // RF -> goes back
-      40, 2, 0,   // LF -> move 
-     -40, 2, 20,  // RR -> stays
-       0, 2, 0,   // LR -> stays
+     20, 1, 10, // Front right -> goes back
+     40, 5, -5, // Front left
+    -20, 5, 30, // Rear left -> goes back
+    -15, 5, 50, // Rear right
 };
 
 static const double WALK_FWD_D[12] = {
-      0, 2, 0,   // Front left leg
-     40, 2, 3,   // Front right leg -> stays
-      0, 2, 0,   // RR -> goes back
-    -40, 2, 20,   // LR -> move
+      5, 1, 20, // Front right
+     20, 1, 10, // Front left -> goes back
+    -15, 5, 40, // Rear left
+    -40, 5, 60, // Rear right -> moves
 };
 
 // ----------------------------------------------------------------
@@ -812,9 +816,10 @@ TinyConsole::Close()
 // ================================================================
 
 void
-TinyConsole::AdvanceNonce(uint32_t& counter)
+TinyConsole::AdvanceNonce(uint32_t& counter, bool isTx)
 {
     uint32_t mc = counter++;
+    mc |= (isTx ? (1U << 31) : 0);
     sessionNonce_[8]  = (uint8_t)( mc        & 0xFF);
     sessionNonce_[9]  = (uint8_t)((mc >>  8) & 0xFF);
     sessionNonce_[10] = (uint8_t)((mc >> 16) & 0xFF);
@@ -831,7 +836,7 @@ TinyConsole::AeadEncrypt(const byte* plaintext, int ptLen,
         return false;
     }
 
-    AdvanceNonce(txCounter_);
+    AdvanceNonce(txCounter_, true);
 
     chacha20poly1305_ctx ctx;
     rfc7539_init(&ctx, (uint8_t*)CHACHA_KEY, sessionNonce_);
@@ -839,13 +844,15 @@ TinyConsole::AeadEncrypt(const byte* plaintext, int ptLen,
     frameOut[0] = (uint8_t)( ptLen       & 0xFF);
     frameOut[1] = (uint8_t)((ptLen >> 8) & 0xFF);
 
+	rfc7539_auth(&ctx, frameOut, FRAME_HEADER_SIZE);
+
     chacha20poly1305_encrypt(&ctx,
                               (uint8_t*)plaintext,
                               frameOut + FRAME_HEADER_SIZE,
                               (size_t)ptLen);
 
     rfc7539_finish(&ctx,
-                   (int64_t)0,
+                   (int64_t)FRAME_HEADER_SIZE,
                    (int64_t)ptLen,
                    frameOut + FRAME_HEADER_SIZE + ptLen);
 
@@ -864,26 +871,33 @@ TinyConsole::AeadDecrypt(const byte* frame, int frameLen,
         return false;
     }
 
-    AdvanceNonce(rxCounter_);
+    AdvanceNonce(rxCounter_, false);
 
     chacha20poly1305_ctx ctx;
     rfc7539_init(&ctx, (uint8_t*)CHACHA_KEY, sessionNonce_);
-
+	
+	uint8_t frame_header_bytes[FRAME_HEADER_SIZE];
+	frame_header_bytes[0] = (uint8_t)( ctLen & 0xFF);
+	frame_header_bytes[1] = (uint8_t)((ctLen >> 8) & 0xFF);
+	
+	rfc7539_auth(&ctx, frame_header_bytes, FRAME_HEADER_SIZE);
+	
     chacha20poly1305_decrypt(&ctx,
                               (uint8_t*)frame,
                               plaintext,
                               (size_t)ctLen);
 
     uint8_t expectedTag[FRAME_TAG_SIZE];
+    
     rfc7539_finish(&ctx,
-                   (int64_t)0,
+                   (int64_t)FRAME_HEADER_SIZE,
                    (int64_t)ctLen,
                    expectedTag);
 
     if (!poly1305_verify(expectedTag,
                          (const unsigned char*)(frame + ctLen))) {
         OSYSLOG1((osyslogERROR,
-                  "TinyConsole: Poly1305 tag mismatch â€” dropping frame"));
+                  "TinyConsole: Poly1305 tag mismatch - dropping frame"));
         memset(plaintext, 0, ctLen);
         *ptLen = 0;
         return false;

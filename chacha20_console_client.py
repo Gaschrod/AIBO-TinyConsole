@@ -40,7 +40,7 @@ from cryptography.hazmat.primitives.ciphers.aead import ChaCha20Poly1305
 # ---------------------------------------------------------------
 #  Configuration  — must match ConsoleConfig.h exactly
 # ---------------------------------------------------------------
-ROBOT_IP  = "192.168.1.124"   # <-- replace with your robot's IP
+ROBOT_IP  = "192.168.1.124"
 PORT      = 7777
 NONCE_SIZE     = 12
 FRAME_TAG_SIZE = 16
@@ -67,13 +67,18 @@ def recv_exact(sock: socket.socket, n: int) -> bytes:
     return buf
 
 
-def build_nonce(session_prefix: bytes, counter: int) -> bytes:
+def build_nonce(session_prefix: bytes, counter: int, is_server_tx: bool) -> bytes:
     """
     Reconstruct the 12-byte nonce for one message.
       session_prefix : bytes [0..7] received from server
       counter        : uint32 shared message counter (LE in bytes [8..11])
+      is_server_tx   : bool indicating if this is a server-to-client message
     """
-    return session_prefix + struct.pack("<I", counter)
+    mc = counter
+
+    if is_server_tx:
+        mc |= 0x80000000   # Set high bit for server-to-client messages
+    return session_prefix + struct.pack("<I", mc)
 
 
 def aead_encrypt(aead: ChaCha20Poly1305,
@@ -83,10 +88,12 @@ def aead_encrypt(aead: ChaCha20Poly1305,
     Encrypt plaintext and return a complete wire frame:
       [2-byte LE ciphertext length][ciphertext][16-byte Poly1305 tag]
     """
-    ct_and_tag = aead.encrypt(nonce, plaintext, None)   # no AAD
+    header = struct.pack("<H", len(plaintext))
+
+    ct_and_tag = aead.encrypt(nonce, plaintext, header)   # Header = additional authenticated data (AAD)
     ct  = ct_and_tag[:-FRAME_TAG_SIZE]
     tag = ct_and_tag[-FRAME_TAG_SIZE:]
-    return struct.pack("<H", len(ct)) + ct + tag
+    return header + ct + tag
 
 
 def aead_decrypt(aead: ChaCha20Poly1305,
@@ -103,7 +110,7 @@ def aead_decrypt(aead: ChaCha20Poly1305,
     ct  = body[:ct_len]
     tag = body[ct_len:]
 
-    return aead.decrypt(nonce, ct + tag, None)          # no AAD
+    return aead.decrypt(nonce, ct + tag, header) 
 
 
 # ---------------------------------------------------------------
@@ -148,14 +155,14 @@ def main():
             plaintext = (cmd + "\n").encode("utf-8")
 
             # 1. Encrypt and send
-            tx_nonce    = build_nonce(session_prefix, tx_counter)
+            tx_nonce    = build_nonce(session_prefix, tx_counter, is_server_tx=False)
             tx_counter += 1
             frame       = aead_encrypt(aead, tx_nonce, plaintext)
             s.sendall(frame)
 
             # 2. Receive and decrypt
             try:
-                rx_nonce    = build_nonce(session_prefix, rx_counter)
+                rx_nonce    = build_nonce(session_prefix, rx_counter, is_server_tx=True)
                 rx_counter += 1
                 response    = aead_decrypt(aead, rx_nonce, s)
                 print("ROBOT:", response.decode("utf-8", errors="replace").strip())
