@@ -114,6 +114,47 @@ def aead_decrypt(aead: ChaCha20Poly1305,
     except InvalidTag:
         raise ValueError("Authentication tag mismatch")
 
+def hchacha20(key: bytes, nonce16: bytes) -> bytes:
+    """
+    HChaCha20 subkey derivation — direct translation of hchacha20() in chacha_merged.c.
+    Runs 20 ChaCha rounds on (key, nonce16) and returns words [0..3, 12..15]
+    of the raw output (no initial-state addition), giving a 32-byte subkey.
+
+    key:     32 bytes  (CHACHA_KEY master key)
+    nonce16: 16 bytes  (session_prefix padded with 8 zero bytes)
+    returns: 32 bytes  (per-session AEAD key)
+    """
+    SIGMA = b"expand 32-byte k"
+
+    def rotl32(v: int, n: int) -> int:
+        return ((v << n) | (v >> (32 - n))) & 0xFFFFFFFF
+
+    def qr(s: list, a: int, b: int, c: int, d: int) -> None:
+        s[a] = (s[a] + s[b]) & 0xFFFFFFFF;  s[d] = rotl32(s[d] ^ s[a], 16)
+        s[c] = (s[c] + s[d]) & 0xFFFFFFFF;  s[b] = rotl32(s[b] ^ s[c], 12)
+        s[a] = (s[a] + s[b]) & 0xFFFFFFFF;  s[d] = rotl32(s[d] ^ s[a],  8)
+        s[c] = (s[c] + s[d]) & 0xFFFFFFFF;  s[b] = rotl32(s[b] ^ s[c],  7)
+
+    # Initial ChaCha20 state: constants (0-3) | key (4-11) | nonce16 (12-15)
+    state = list(struct.unpack_from('<16I', SIGMA + key + nonce16))
+
+    for _ in range(10):          # 10 double-rounds = 20 rounds total
+        qr(state, 0, 4,  8, 12) # column rounds
+        qr(state, 1, 5,  9, 13)
+        qr(state, 2, 6, 10, 14)
+        qr(state, 3, 7, 11, 15)
+        qr(state, 0, 5, 10, 15) # diagonal rounds
+        qr(state, 1, 6, 11, 12)
+        qr(state, 2, 7,  8, 13)
+        qr(state, 3, 4,  9, 14)
+
+    # Output: first 4 words + last 4 words (words 12-15) — NOT added back to
+    # the initial state. This is what distinguishes HChaCha20 from ChaCha20.
+    return struct.pack('<8I',
+        state[0],  state[1],  state[2],  state[3],
+        state[12], state[13], state[14], state[15])
+
+
 def main():
     # -- Connect --
     try:
@@ -137,9 +178,14 @@ def main():
     s.sendall(client_nonce)
     session_prefix = bytes(a ^ b for a, b in zip(raw_nonce[:8], client_nonce[:8]))
 
+    # Derive a per-session AEAD key: HChaCha20(master_key, session_prefix || 0x00*8)
+    # Mirrors the derivation in TinyConsole.cc ReceiveCont phase 2.
+    hchacha_input = session_prefix + b'\x00' * 8   # 8-byte prefix padded to 16 bytes
+    session_key   = hchacha20(CHACHA_KEY, hchacha_input)
+
     tx_counter = 0
     rx_counter = 0
-    aead        = ChaCha20Poly1305(CHACHA_KEY)
+    aead        = ChaCha20Poly1305(session_key)
 
     # -- Command loop --
     try:

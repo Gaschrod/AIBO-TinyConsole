@@ -712,6 +712,33 @@ TinyConsole::ReceiveCont(ANTENVMSG msg)
 		// before evry encrypt/decrypt call), so only 0..7 matter here.
 		for (int i = 0; i < 8; i++)
 			sessionNonce_[i] ^= (uint8_t)conn_.recvData[i];
+			
+		// Dervie fresh 32-byte AEAD key for this session with HChaCha20
+		// Input: master key + 16-byte HChaCha20 input built from the session prefix
+		// (bytes [0..7]) padded with zeros to 16 bytes
+		// sessionNonce_[8..11] are counter-controlled and not yeat meaningful
+		
+		{
+			ECRYPT_ctx hctx;
+			// [8..15] remain 0 -> reserved for futur domain separation if needed
+			ECRYPT_keysetup(&hctx, (const u8*)CHACHA_KEY, 256, 16);
+			
+			hctx.input[12] =   (uint32_t)sessionNonce_[0]
+							| ((uint32_t)sessionNonce_[1] << 8)
+							| ((uint32_t)sessionNonce_[2] << 16)
+							| ((uint32_t)sessionNonce_[3] << 24);
+			
+			hctx.input[13] =   (uint32_t)sessionNonce_[4]
+							| ((uint32_t)sessionNonce_[5] << 8)
+							| ((uint32_t)sessionNonce_[6] << 16)
+							| ((uint32_t)sessionNonce_[7] << 24);
+			
+			hctx.input[14] = 0;
+			hctx.input[15] = 0;
+			
+			hchacha20(&hctx, sessionKey_);
+		}
+		
 		handshakeDone_ = true;
 		recvPhase_ = 0;
 		Receive(FRAME_HEADER_SIZE, FRAME_HEADER_SIZE);
@@ -953,7 +980,7 @@ TinyConsole::AeadEncrypt(const byte* plaintext, int ptLen,
     AdvanceNonce(txCounter_, true);
 
     chacha20poly1305_ctx ctx;
-    rfc7539_init(&ctx, (uint8_t*)CHACHA_KEY, sessionNonce_);
+    rfc7539_init(&ctx, sessionKey_, sessionNonce_);
 
     frameOut[0] = (uint8_t)( ptLen       & 0xFF);
     frameOut[1] = (uint8_t)((ptLen >> 8) & 0xFF);
@@ -988,7 +1015,7 @@ TinyConsole::AeadDecrypt(const byte* frame, int frameLen,
     AdvanceNonce(rxCounter_, false);
 
     chacha20poly1305_ctx ctx;
-    rfc7539_init(&ctx, (uint8_t*)CHACHA_KEY, sessionNonce_);
+    rfc7539_init(&ctx, sessionKey_, sessionNonce_);
 	
 	uint8_t frame_header_bytes[FRAME_HEADER_SIZE];
 	frame_header_bytes[0] = (uint8_t)( ctLen & 0xFF);

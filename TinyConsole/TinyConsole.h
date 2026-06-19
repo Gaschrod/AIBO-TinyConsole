@@ -218,7 +218,8 @@ private:
     uint32_t rxCounter_;
     bool     pendingClose_;
     bool     handshakeDone_;
-
+	uint8_t  sessionKey_[32];
+		
     // Two-phase receive state
     int      recvPhase_;
     uint16_t pendingFrameLen_;
