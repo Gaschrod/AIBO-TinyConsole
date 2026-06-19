@@ -296,6 +296,7 @@ TinyConsole::TinyConsole()
     : txCounter_(0),
       rxCounter_(0),
       pendingClose_(false),
+      handshakeDone_(false),
       recvPhase_(0),
       pendingFrameLen_(0),
       motionState_(MSTATE_IDLE),
@@ -603,6 +604,7 @@ TinyConsole::ListenCont(ANTENVMSG msg)
 
     conn_.state   = CONNECTION_CONNECTED;
     pendingClose_ = false;
+    handshakeDone_ = false;
     recvPhase_    = 0;
 
     // Build 12-byte session nonce:
@@ -664,19 +666,22 @@ TinyConsole::SendCont(ANTENVMSG msg)
         Close();
         return;
     }
-
-    recvPhase_ = 0;
-    Receive(FRAME_HEADER_SIZE, FRAME_HEADER_SIZE);
+	
+	if (!handshakeDone_) {
+		recvPhase_ = 2;
+    	Receive(NONCE_SIZE, NONCE_SIZE);	
+	} else {
+		recvPhase_ = 0;
+    	Receive(FRAME_HEADER_SIZE, FRAME_HEADER_SIZE);	
+	}
 }
 
 void
 TinyConsole::ReceiveCont(ANTENVMSG msg)
 {
-    TCPEndpointReceiveMsg* recvMsg =
-        (TCPEndpointReceiveMsg*)antEnvMsg::Receive(msg);
+    TCPEndpointReceiveMsg* recvMsg = (TCPEndpointReceiveMsg*)antEnvMsg::Receive(msg);
 
-    OSYSDEBUG(("TinyConsole::ReceiveCont() phase=%d n=%d\n",
-               recvPhase_, recvMsg->sizeMin));
+    OSYSDEBUG(("TinyConsole::ReceiveCont() phase=%d n=%d\n", recvPhase_, recvMsg->sizeMin));
 
     if (recvMsg->error == TCP_CONNECTION_CLOSED) {
         OSYSPRINT(("TinyConsole: client disconnected\n"));
@@ -684,22 +689,42 @@ TinyConsole::ReceiveCont(ANTENVMSG msg)
         return;
     }
     if (recvMsg->error != TCP_SUCCESS) {
-        OSYSLOG1((osyslogERROR, "TinyConsole::ReceiveCont FAILED %d",
-                  recvMsg->error));
+        OSYSLOG1((osyslogERROR, "TinyConsole::ReceiveCont FAILED %d", recvMsg->error));
         Close();
         return;
     }
-
+	
     conn_.state = CONNECTION_CONNECTED;
     int n = recvMsg->sizeMin;
+
+	// ------------------------------------------------------------------
+	// Phase 2 - client nonce (12 bytes, plaintext, handshake only)
+	// Will need to rename/change numbering of phases
+	// ------------------------------------------------------------------
+	if (recvPhase_ == 2) {
+		if (n < NONCE_SIZE) {
+			OSYSLOG1((osyslogERROR, "TinyConsole: short client nonce (%d bytes)", n));
+			Close();
+			return;
+		}
+		// XOR client contribution into bytes [0..7]
+		// Bytes [8..11] are counter-controlled (AdvanceNonce overwrites them
+		// before evry encrypt/decrypt call), so only 0..7 matter here.
+		for (int i = 0; i < 8; i++)
+			sessionNonce_[i] ^= (uint8_t)conn_.recvData[i];
+		handshakeDone_ = true;
+		recvPhase_ = 0;
+		Receive(FRAME_HEADER_SIZE, FRAME_HEADER_SIZE);
+		return;
+	}
+
 
     // ------------------------------------------------------------------
     //  Phase 0 2-byte frame header
     // ------------------------------------------------------------------
     if (recvPhase_ == 0) {
         if (n < FRAME_HEADER_SIZE) {
-            OSYSLOG1((osyslogERROR,
-                      "TinyConsole: short frame header (%d bytes)", n));
+            OSYSLOG1((osyslogERROR, "TinyConsole: short frame header (%d bytes)", n));
             Close();
             return;
         }

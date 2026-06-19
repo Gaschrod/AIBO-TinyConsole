@@ -32,10 +32,9 @@
 #   pip install cryptography
 #
 
-import socket
-import struct
-import sys
+import socket, struct, os, sys
 from cryptography.hazmat.primitives.ciphers.aead import ChaCha20Poly1305
+from cryptography.exceptions import InvalidTag
 
 # ---------------------------------------------------------------
 #  Configuration  — must match ConsoleConfig.h exactly
@@ -110,12 +109,10 @@ def aead_decrypt(aead: ChaCha20Poly1305,
     ct  = body[:ct_len]
     tag = body[ct_len:]
 
-    return aead.decrypt(nonce, ct + tag, header) 
-
-
-# ---------------------------------------------------------------
-#  Main
-# ---------------------------------------------------------------
+    try:
+        return aead.decrypt(nonce, ct + tag, header)
+    except InvalidTag:
+        raise ValueError("Authentication tag mismatch")
 
 def main():
     # -- Connect --
@@ -134,9 +131,11 @@ def main():
     print(f"Banner: {banner.decode('ascii', errors='replace').strip()}")
 
     raw_nonce      = recv_exact(s, NONCE_SIZE)
-    session_prefix = raw_nonce[:8]   # bytes [0..7]: session ID + client IP
-    # bytes [8..11] are 0x00 placeholders from the server; we manage our
-    # own counter from 0 in lock-step with the server's msgCounter_.
+    # We send random contribution to session nonce -> AIBO then XOR into sessionNonce before first AEAD frame
+    # Bytes [8..11] are counter-controlled on both sides
+    client_nonce = os.urandom(NONCE_SIZE)
+    s.sendall(client_nonce)
+    session_prefix = bytes(a ^ b for a, b in zip(raw_nonce[:8], client_nonce[:8]))
 
     tx_counter = 0
     rx_counter = 0
@@ -166,7 +165,7 @@ def main():
                 rx_counter += 1
                 response    = aead_decrypt(aead, rx_nonce, s)
                 print("ROBOT:", response.decode("utf-8", errors="replace").strip())
-            except ValueError:
+            except (ValueError, InvalidTag):
                 print("ERROR: authentication tag mismatch — dropping response")
             except ConnectionError:
                 print("Server closed the connection.")

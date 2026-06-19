@@ -217,6 +217,7 @@ private:
     uint32_t txCounter_;
     uint32_t rxCounter_;
     bool     pendingClose_;
+    bool     handshakeDone_;
 
     // Two-phase receive state
     int      recvPhase_;
