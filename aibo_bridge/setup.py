@@ -6,7 +6,7 @@ package_name = "aibo_bridge"
 
 setup(
     name=package_name,
-    version="0.1.0",
+    version="1.0",
     packages=find_packages(exclude=["test"]),
     data_files=[
         # Required by ament to find the package
@@ -24,8 +24,8 @@ setup(
     ],
     install_requires=["setuptools"],
     zip_safe=True,
-    maintainer="you",
-    maintainer_email="you@example.com",
+    maintainer="Alexis Regardin",
+    maintainer_email="alexis.regardin@ulb.be",
     description="ROS 2 bridge for the Sony AIBO ERS-7 TinyConsole",
     license="MIT",
     tests_require=["pytest"],
