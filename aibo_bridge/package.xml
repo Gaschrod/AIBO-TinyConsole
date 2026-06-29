@@ -1,0 +1,33 @@
+<?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd"
+            schematypens="http://www.w3.org/2001/XMLSchema"?>
+<package format="3">
+  <name>aibo_bridge</name>
+  <version>0.1.0</version>
+  <description>
+    ROS 2 bridge node for the Sony AIBO ERS-7 TinyConsole.
+    Wraps the ChaCha20-Poly1305 AEAD TCP client and exposes the AIBO
+    as a ROS 2 node with a ~/command topic, a /cmd_vel subscriber for
+    teleop, and a ~/connected status publisher.
+  </description>
+  <maintainer email="you@example.com">you</maintainer>
+  <license>MIT</license>
+
+  <!-- ROS 2 runtime dependencies -->
+  <depend>rclpy</depend>
+  <depend>std_msgs</depend>
+  <depend>geometry_msgs</depend>
+
+  <!-- Python dependency: install with  pip install cryptography -->
+  <!-- (not a ROS package, so listed as a comment for clarity)  -->
+
+  <!-- Build / test tooling -->
+  <test_depend>ament_copyright</test_depend>
+  <test_depend>ament_flake8</test_depend>
+  <test_depend>ament_pep257</test_depend>
+  <test_depend>python3-pytest</test_depend>
+
+  <export>
+    <build_type>ament_python</build_type>
+  </export>
+</package>
