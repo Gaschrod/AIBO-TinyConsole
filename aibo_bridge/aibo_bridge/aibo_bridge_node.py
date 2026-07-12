@@ -60,10 +60,10 @@ from aibo_bridge.aibo_link import AiboLink
 # Override with the 'chacha_key' ROS 2 parameter; never commit a real
 # production key to source control.
 _DEFAULT_KEY_HEX = (
-    "407781ED6A6D04C2"
-    "7F24FB688716221E"
-    "8B8BE31E6D32C86A"
-    "1FC62F38C6D0694C"
+    "0000000000000000"
+    "0000000000000000"
+    "0000000000000000"
+    "0000000000000000"
 )
 
 # Commands that TinyConsole accepts (upper-case, used for validation).
