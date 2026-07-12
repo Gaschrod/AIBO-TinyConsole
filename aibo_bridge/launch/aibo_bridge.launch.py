@@ -34,10 +34,10 @@ def generate_launch_description() -> LaunchDescription:
             "chacha_key",
             # Default matches ConsoleConfig.h — override in production.
             default_value=(
-                "407781ED6A6D04C2"
-                "7F24FB688716221E"
-                "8B8BE31E6D32C86A"
-                "1FC62F38C6D0694C"
+                "0000000000000000"
+                "0000000000000000"
+                "0000000000000000"
+                "0000000000000000"
             ),
             description="32-byte ChaCha20 key as 64 hex characters",
         ),
