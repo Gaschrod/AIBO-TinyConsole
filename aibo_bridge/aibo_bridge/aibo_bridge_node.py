@@ -28,6 +28,7 @@ Published
   robot_port        (int)      TinyConsole TCP port       [7777]
   chacha_key        (string)   32-byte key as 64 hex chars
                                (default matches ConsoleConfig.h)
+  robot_ed25519_pubkey (string) 32-byte Ed25519 public key as 64 hex chars. Required: the node won't start without it.
   cmd_vel_deadband  (double)   |linear.x| threshold m/s  [0.05]
   reconnect_period  (double)   seconds between reconnect attempts [5.0]
 
@@ -59,7 +60,7 @@ from aibo_bridge.aibo_link import AiboLink
 # Default key — matches ConsoleConfig.h / chacha20_console_client.py.
 # Override with the 'chacha_key' ROS 2 parameter; never commit a real
 # production key to source control.
-_DEFAULT_KEY_HEX = (
+CHACHA20_KEY = (
     "0000000000000000"
     "0000000000000000"
     "0000000000000000"
@@ -67,10 +68,10 @@ _DEFAULT_KEY_HEX = (
 )
 
 # Commands that TinyConsole accepts (upper-case, used for validation).
-_VALID_COMMANDS = {"GET_UP", "REST", "FORWARD", "BACK", "STOP", "PING", "QUIT"}
+VALID_COMMANDS = {"GET_UP", "REST", "FORWARD", "BACK", "STOP", "PING", "QUIT"}
 
 # Motion commands that affect the AIBO's movement state (used for debouncing).
-_MOTION_COMMANDS = {"FORWARD", "BACK", "STOP"}
+MOTION_COMMANDS = {"FORWARD", "BACK", "STOP"}
 
 
 class AiboBridgeNode(Node):
@@ -81,16 +82,18 @@ class AiboBridgeNode(Node):
         # ----------------------------------------------------------
         # Parameters
         # ----------------------------------------------------------
-        self.declare_parameter("robot_ip",        "192.168.1.124")
-        self.declare_parameter("robot_port",       7777)
-        self.declare_parameter("chacha_key",       _DEFAULT_KEY_HEX)
+        self.declare_parameter("robot_ip", "192.168.1.124")
+        self.declare_parameter("robot_port", 7777)
+        self.declare_parameter("chacha_key", CHACHA20_KEY)
+        self.declare_parameter("robot_ed25519_pubkey", "")
         self.declare_parameter("cmd_vel_deadband", 0.05)
         self.declare_parameter("reconnect_period", 5.0)
 
         robot_ip  = self.get_parameter("robot_ip").value
         robot_port = self.get_parameter("robot_port").value
         key_hex   = self.get_parameter("chacha_key").value
-        self._deadband = float(self.get_parameter("cmd_vel_deadband").value)
+        pubkey_hex = self.get_parameter("robot_ed25519_pubkey").value
+        self.deadband = float(self.get_parameter("cmd_vel_deadband").value)
         reconnect_period = float(self.get_parameter("reconnect_period").value)
 
         # Parse and validate the key
@@ -106,52 +109,77 @@ class AiboBridgeNode(Node):
             self.get_logger().fatal(msg)
             raise ValueError(msg)
 
+        # Parse and validate the robot's pinned Ed25519 identity key.
+        # Deliberately no usable default here: this is an authentication security
+        # control, not a convenience.  The node will refuse to start without it.
+        if not pubkey_hex:
+            msg = (
+                "robot_ed25519_pubkey is not set. Run the generator "
+                "once (offline, on this machine) to "
+                "generate the robot's identity key pair, flash "
+                "ROBOT_ED25519_SK into ConsoleConfig.h, and pass the "
+                "printed public-key hex here via this launch parameter."
+            )
+            self.get_logger().fatal(msg)
+            raise ValueError(msg)
+        try:
+            robot_pubkey = bytes.fromhex(pubkey_hex)
+        except ValueError as exc:
+            self.get_logger().fatal(
+                f"robot_ed25519_pubkey is not valid hex: {exc}"
+            )
+            raise
+        if len(robot_pubkey) != 32:
+            msg = f"robot_ed25519_pubkey must decode to 32 bytes, got {len(robot_pubkey)}"
+            self.get_logger().fatal(msg)
+            raise ValueError(msg)
+
         # ----------------------------------------------------------
         # Link + synchronisation
         # ----------------------------------------------------------
-        self._link = AiboLink(robot_ip, robot_port, key)
-        self._lock = threading.Lock()          # serialises AEAD exchanges
-        self._last_motion_cmd: Optional[str] = None  # debounce state
+        self.link = AiboLink(robot_ip, robot_port, key, robot_pubkey)
+        self.lock = threading.Lock()          # serialises AEAD exchanges
+        self.last_motion_cmd: Optional[str] = None  # debounce state
 
         # ----------------------------------------------------------
         # Publishers
         # ----------------------------------------------------------
-        self._pub_response  = self.create_publisher(String, "~/response",  10)
-        self._pub_connected = self.create_publisher(Bool,   "~/connected", 10)
+        self.pub_response  = self.create_publisher(String, "~/response",  10)
+        self.pub_connected = self.create_publisher(Bool,   "~/connected", 10)
 
         # ----------------------------------------------------------
         # Subscribers
         # ----------------------------------------------------------
         self.create_subscription(
-            String, "~/command", self._command_cb, 10
+            String, "~/command", self.command_cb, 10
         )
         self.create_subscription(
-            Twist, "/cmd_vel", self._cmd_vel_cb, 10
+            Twist, "/cmd_vel", self.cmd_vel_cb, 10
         )
 
         # ----------------------------------------------------------
         # Reconnection timer
         # ----------------------------------------------------------
-        self._reconnect_timer = self.create_timer(
-            reconnect_period, self._reconnect_cb
+        self.reconnect_timer = self.create_timer(
+            reconnect_period, self.reconnect_cb
         )
 
         # ----------------------------------------------------------
         # Initial connection attempt
         # ----------------------------------------------------------
-        self._try_connect()
+        self.try_connect()
 
     # ==============================================================
     # Connection management
     # ==============================================================
 
-    def _try_connect(self) -> bool:
+    def try_connect(self) -> bool:
         """
         Attempt one connection + handshake.  Not holding _lock —
         no command callbacks can succeed while disconnected anyway.
         Returns True on success.
         """
-        if self._link.is_connected:
+        if self.link.is_connected:
             return True
 
         robot_ip   = self.get_parameter("robot_ip").value
@@ -160,60 +188,60 @@ class AiboBridgeNode(Node):
             f"Connecting to AIBO at {robot_ip}:{robot_port} ..."
         )
         try:
-            banner = self._link.connect()
+            banner = self.link.connect()
             self.get_logger().info(f"Connected — banner: '{banner}'")
-            self._publish_connected(True)
-            self._last_motion_cmd = None  # reset debounce after reconnect
+            self.publish_connected(True)
+            self.last_motion_cmd = None  # reset debounce after reconnect
             return True
         except Exception as exc:
             self.get_logger().warn(f"Connection failed: {exc}")
-            self._publish_connected(False)
+            self.publish_connected(False)
             return False
 
-    def _reconnect_cb(self) -> None:
+    def reconnect_cb(self) -> None:
         """Timer callback: reconnect if the link is down."""
-        if self._link.is_connected:
-            self._publish_connected(True)   # keep status fresh
+        if self.link.is_connected:
+            self.publish_connected(True)   # keep status fresh
         else:
-            self._try_connect()
+            self.try_connect()
 
-    def _publish_connected(self, state: bool) -> None:
+    def publish_connected(self, state: bool) -> None:
         msg = Bool()
         msg.data = state
-        self._pub_connected.publish(msg)
+        self.pub_connected.publish(msg)
 
     # ==============================================================
     # Core send helper
     # ==============================================================
 
-    def _send(self, cmd: str) -> Optional[str]:
+    def send(self, cmd: str) -> Optional[str]:
         """
         Thread-safe: acquire lock, send cmd, return the AIBO's response
         string, or None if the link is down or an error occurred.
         On any link error the socket is force-closed so the reconnect
         timer can re-establish the connection on its next tick.
         """
-        with self._lock:
-            if not self._link.is_connected:
+        with self.lock:
+            if not self.link.is_connected:
                 self.get_logger().warn(
                     f"Cannot send '{cmd}': not connected to AIBO"
                 )
                 return None
             try:
-                response = self._link.send_command(cmd)
+                response = self.link.send_command(cmd)
             except Exception as exc:
                 self.get_logger().error(
                     f"Link error while sending '{cmd}': {exc}"
                 )
-                self._link.close()           # reset state; timer will reconnect
-                self._publish_connected(False)
-                self._last_motion_cmd = None
+                self.link.close()           # reset state; timer will reconnect
+                self.publish_connected(False)
+                self.last_motion_cmd = None
                 return None
 
         # Publish and log outside the lock
         msg = String()
         msg.data = response
-        self._pub_response.publish(msg)
+        self.pub_response.publish(msg)
         self.get_logger().info(f"AIBO ← '{cmd}'  →  '{response}'")
         return response
 
@@ -221,34 +249,34 @@ class AiboBridgeNode(Node):
     # ~/command subscriber  (direct pass-through)
     # ==============================================================
 
-    def _command_cb(self, msg: String) -> None:
+    def command_cb(self, msg: String) -> None:
         cmd = msg.data.strip().upper()
         if not cmd:
             return
 
-        if cmd not in _VALID_COMMANDS:
+        if cmd not in VALID_COMMANDS:
             self.get_logger().warn(
                 f"Unknown command '{cmd}'. "
-                f"Valid commands: {', '.join(sorted(_VALID_COMMANDS))}"
+                f"Valid commands: {', '.join(sorted(VALID_COMMANDS))}"
             )
             return
 
-        response = self._send(cmd)
+        response = self.send(cmd)
 
         # If QUIT was acknowledged, close our side of the socket.
         # TinyConsole closes the connection immediately after sending "BYE".
         if cmd == "QUIT" and response is not None:
-            with self._lock:
-                self._link.close()
-            self._publish_connected(False)
-            self._last_motion_cmd = None
+            with self.lock:
+                self.link.close()
+            self.publish_connected(False)
+            self.last_motion_cmd = None
             self.get_logger().info("Sent QUIT — connection closed by AIBO")
 
     # ==============================================================
     # /cmd_vel subscriber  (teleop / Nav2 compatible)
     # ==============================================================
 
-    def _cmd_vel_cb(self, msg: Twist) -> None:
+    def cmd_vel_cb(self, msg: Twist) -> None:
         """
         Translate a Twist message into a discrete AIBO motion command.
 
@@ -258,18 +286,18 @@ class AiboBridgeNode(Node):
         """
         lx = msg.linear.x
 
-        if lx > self._deadband:
+        if lx > self.deadband:
             desired = "FORWARD"
-        elif lx < -self._deadband:
+        elif lx < -self.deadband:
             desired = "BACK"
         else:
             desired = "STOP"
 
-        if desired == self._last_motion_cmd:
+        if desired == self.last_motion_cmd:
             return  # no change — nothing to do
 
-        self._last_motion_cmd = desired
-        self._send(desired)
+        self.last_motion_cmd = desired
+        self.send(desired)
 
     # ==============================================================
     # Cleanup
@@ -277,14 +305,14 @@ class AiboBridgeNode(Node):
 
     def destroy_node(self) -> None:
         self.get_logger().info("Shutting down AiboBridgeNode ...")
-        with self._lock:
-            if self._link.is_connected:
+        with self.lock:
+            if self.link.is_connected:
                 try:
                     # Park the AIBO safely before we go
-                    self._link.send_command("REST")
+                    self.link.send_command("REST")
                 except Exception:
                     pass
-                self._link.disconnect()
+                self.link.disconnect()
         super().destroy_node()
 
 
@@ -304,5 +332,4 @@ def main(args=None) -> None:
         rclpy.shutdown()
 
 
-if __name__ == "__main__":
-    main()
+main()
