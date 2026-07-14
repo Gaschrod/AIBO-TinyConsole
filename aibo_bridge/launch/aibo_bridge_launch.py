@@ -42,6 +42,14 @@ def generate_launch_description() -> LaunchDescription:
             description="32-byte ChaCha20 key as 64 hex characters",
         ),
         DeclareLaunchArgument(
+            "robot_ed25519_pubkey",
+            default_value="",
+            description=(
+                "32-byte Ed25519 public key as 64 hex characters. "
+                "The node fails if this is left empty."
+            ),
+        ),
+        DeclareLaunchArgument(
             "cmd_vel_deadband",
             default_value="0.05",
             description=(
@@ -69,6 +77,7 @@ def generate_launch_description() -> LaunchDescription:
                 "robot_ip":        LaunchConfiguration("robot_ip"),
                 "robot_port":      LaunchConfiguration("robot_port"),
                 "chacha_key":      LaunchConfiguration("chacha_key"),
+                "robot_ed25519_pubkey": LaunchConfiguration("robot_ed25519_pubkey"),
                 "cmd_vel_deadband": LaunchConfiguration("cmd_vel_deadband"),
                 "reconnect_period": LaunchConfiguration("reconnect_period"),
             }

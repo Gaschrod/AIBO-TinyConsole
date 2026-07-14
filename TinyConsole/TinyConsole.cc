@@ -6,22 +6,13 @@
 // immediately, and the motion itself runs via the Ready() / subject callback
 // loop driven by the OPEN-R scheduler.
 //
-// Gait implementation notes (ERS-7 joint convention):
+// Notes about legs joints:
 //   J1 hip abduction/adduction   (large value = leg rotated outward)
-//   J2 hip flexion/extension     (higher = more forward, range 10  88°)
-//   J3  knee flexion               (higher = more bent = foot lifted)
+//   J2 hip flexion/extension     (higher = more forward)
+//   J3 knee flexion               (higher = more bent = foot lifted)
 //
 //   Walking direction depends on which end of the J2 range the "planted"
-//   foot sits at.  All gait angles below are INITIAL ESTIMATES derived from
-//   the ERS-7 Model Information document; empirical tuning on hardware is
-//   expected and the architecture makes that straightforward.
-//
-//   Joint layout used throughout (index 0-11):
-//     0-2  : RF  J1, J2, J3   (Right Front,  r4/c1â€¦)
-//     3-5  : LF  J1, J2, J3   (Left  Front,  r2/c1â€¦)
-//     6-8  : RR  J1, J2, J3   (Right Rear,   r5/c1â€¦)
-//     9-11 : LR  J1, J2, J3   (Left  Rear,   r3/c1â€¦)
-//
+//   foot sits at.
 
 #include <math.h>
 #include <string.h>
@@ -37,66 +28,76 @@
 //  Static member definitions
 // ================================================================
 
-uint32_t TinyConsole::sessionId_ = 0;
+uint32_t TinyConsole::sessionId = 0;
 
 // ================================================================
-//  Joint locators  (ERS-7, Appendix A.1 of Model Information)
+// Joint locators (taken from ERS-7 Model Information official Sony's documentation)
+//
+// This can be very confusing but the official documentation uses a view from the side
+// as a point of reference when naming legs. It is recommended to use the side-view image 
+// as a reference (the head of the robot is located on the left side of the image):
+//
+// - Left  = front legs (left of the side view)
+// - Right = rear of the robot (right of the side view)
+// - Front = left legs (visible in the side view)
+// - Rear  = right legs (hidden in the side view)
 // ================================================================
+
 
 static const char* const JOINT_LOCATOR[TinyConsole::NUM_JOINTS] = {
-    "PRM:/r4/c1-Joint2:41",         // RF J1
-    "PRM:/r4/c1/c2-Joint2:42",      // RF J2
-    "PRM:/r4/c1/c2/c3-Joint2:43",   // RF J3
 
-    "PRM:/r2/c1-Joint2:21",         // LF J1
-    "PRM:/r2/c1/c2-Joint2:22",      // LF J2
-    "PRM:/r2/c1/c2/c3-Joint2:23",   // LF J3
+    "PRM:/r2/c1-Joint2:21",         // Left Front J1
+    "PRM:/r2/c1/c2-Joint2:22",      // Left Front J2
+    "PRM:/r2/c1/c2/c3-Joint2:23",   // Left Front J3
 
-    "PRM:/r3/c1-Joint2:31",         // RR J1
-    "PRM:/r3/c1/c2-Joint2:32",      // RR J2
-    "PRM:/r3/c1/c2/c3-Joint2:33",   // RR J3
+    "PRM:/r3/c1-Joint2:31",         // Left Rear J1
+    "PRM:/r3/c1/c2-Joint2:32",      // Left Rear J2
+    "PRM:/r3/c1/c2/c3-Joint2:33",   // Left Rear J3
 
-    "PRM:/r5/c1-Joint2:51",         // LR J1
-    "PRM:/r5/c1/c2-Joint2:52",      // LR J2
-    "PRM:/r5/c1/c2/c3-Joint2:53",   // LR J3
+    "PRM:/r4/c1-Joint2:41",         // Right Front J1
+    "PRM:/r4/c1/c2-Joint2:42",      // Right Front J2
+    "PRM:/r4/c1/c2/c3-Joint2:43",   // Right Front J3
+
+    "PRM:/r5/c1-Joint2:51",         // Right Rear J1
+    "PRM:/r5/c1/c2-Joint2:52",      // Right Rear J2
+    "PRM:/r5/c1/c2/c3-Joint2:53",   // Right Rear J3
 };
 
 
 
 // ================================================================
-//  Pose tables  (all angles in degrees)
+// Pose tables  (all angles in degrees)
 //
-//  Layout: { RF_J1, RF_J2, RF_J3,
-//             LF_J1, LF_J2, LF_J3,
-//             RR_J1, RR_J2, RR_J3,
-//             LR_J1, LR_J2, LR_J3 }
+// Here:
+//  - Front = front legs 
+//  - Rear = rear legs
 //
-//  ERS-7 software limits (Model Information 2.1.1):
-//    Left  J1: 115  130    Right J1: 130  115
-//    All   J2:10  88     All   J3: 25  122
+// Note: use the ERS-7 Model Information official Sony's documentation 
+// as a reference for the maximum and minimum values of each joint.
+// Not following it could lead to damage of the robot's legs and/or motors.
 // ================================================================
 
-// Sleeping body low, rear knees tucked (J3=122 fully bent).
+// Sleeping body low, rear knees tucked
 
 static const double SLEEPING_POSE_0[12] = {
-      10,  1,  30,  // Front
-	  10,  1,  30,  // Front
-	 -35,  5,  60, // Rear
-	 -35,  5,  60, // Rear
+     10,  1,  30,  // Front
+	 10,  1,  30,  // Front
+	-35,  5,  60, // Rear
+	-35,  5,  60, // Rear
 };
 
 static const double SLEEPING_POSE_1[12] = {
-      10,  1,   45,  // Front
-	  10,  1,   45,  // Front
-     -45,  5,   70,  // RR
-     -45,  5,   70,  // RR
+     10,  1,   45,  // Front
+     10,  1,   45,  // Front
+    -45,  5,   70,  // RR
+    -45,  5,   70,  // RR
 };
 
 static const double SLEEPING_POSE_2[12] = {
-      10,  1,   80,  // Front
-	  10,  1,   80,  // Front
-     -65,  5,   80,  // RR
-     -65,  5,   80,  // RR
+     10,  1,   80,  // Front
+	 10,  1,   80,  // Front
+    -65,  5,   80,  // RR
+    -65,  5,   80,  // RR
 };
 
 static const double SLEEPING_POSE_3[12] = {
@@ -106,8 +107,7 @@ static const double SLEEPING_POSE_3[12] = {
     -125,  5,   120,  // RR
 };
 
-
-
+// Rising from sleeping to standing pose based on Motion Files (Sit_to_Stand.MTN available in Motion Files folder of the repository)
 static const double RISING_POSE_0[12] = {
 	  65,  4,   43, // Front
 	  65,  4,   43, // Front
@@ -147,9 +147,9 @@ static const double BROADBASE_POSE[12] = {
 	   -5,  3, 30,  // Back
 };
 
-
 // ----------------------------------------------------------------
-//  Forward walking motion
+//  Forward walking motion based on Motion Files (Walk_forward.MTN available in Motion Files folder of the repository)
+//
 //	A = front right up
 //  B = front right down
 //  C = back left up
@@ -219,7 +219,9 @@ static const double WALK_FWD_H[12] = {
 
 
 // ----------------------------------------------------------------
-//  Backward trot roles reversed: 
+//  Backward trot roles reversed based on Motion Files (Walk_backward.MTN available in Motion Files folder of the repository)
+//
+//
 //  A = back right up
 //  B = back right down
 //  C = front left up
@@ -293,24 +295,25 @@ static const double WALK_BACK_H[12] = {
 // ================================================================
 
 TinyConsole::TinyConsole()
-    : txCounter_(0),
-      rxCounter_(0),
-      pendingClose_(false),
-      handshakeDone_(false),
-      recvPhase_(0),
-      pendingFrameLen_(0),
-      motionState_(MSTATE_IDLE),
-      pendingCmd_(MCMD_NONE),
-      motionCounter_(0),
-      walkForward_(true)
+    : txCounter(0),
+      rxCounter(0),
+      pendingClose(false),
+      handshakeStage(HS_BANNER_SENT),
+      recvPhase(0),
+      pendingFrameLen(0),
+      motionState(MSTATE_IDLE),
+      pendingCmd(MCMD_NONE),
+      motionCounter(0),
+      walkForward(true)
 {
-    conn_.state = CONNECTION_CLOSED;
-    memset(sessionNonce_, 0, sizeof(sessionNonce_));
-    memset(motionStart_,  0, sizeof(motionStart_));
-    memset(motionDelta_,  0, sizeof(motionDelta_));
+    conn.state = CONNECTION_CLOSED;
+    memset(sessionNonce,    0, sizeof(sessionNonce));
+    memset(serverNonceSent, 0, sizeof(serverNonceSent));
+    memset(motionStart,  0, sizeof(motionStart));
+    memset(motionDelta,  0, sizeof(motionDelta));
 
     for (int i = 0; i < NUM_CMD_VECTORS; i++)
-        cmdRegion_[i] = 0;
+        cmdRegion[i] = 0;
 }
 
 // ================================================================
@@ -322,7 +325,7 @@ TinyConsole::DoInit(const OSystemEvent& event)
 {
     OSYSDEBUG(("TinyConsole::DoInit()\n"));
 
-    NEW_ALL_SUBJECT_AND_OBSERVER;
+    NEW_ALL_SUBJECT_AND_OBSERVER; // Macros defined in <OPENR/core_macro.h>
     REGISTER_ALL_ENTRY;
     SET_ALL_READY_AND_NOTIFY_ENTRY;
 
@@ -340,37 +343,38 @@ TinyConsole::DoStart(const OSystemEvent& event)
 {
 	OSYSDEBUG(("TinyConsole::DoStart()\n"));
 
-    ipstackRef_ = antStackRef("IPStack");
+    ipstackRef = antStackRef("IPStack");
 
     antEnvCreateSharedBufferMsg sendBufMsg(CONSOLE_BUFSIZE);
-    sendBufMsg.Call(ipstackRef_, sizeof(sendBufMsg));
+    sendBufMsg.Call(ipstackRef, sizeof(sendBufMsg));
     if (sendBufMsg.error != ANT_SUCCESS) {
         OSYSLOG1((osyslogERROR, "TinyConsole: can't alloc send buffer %d", sendBufMsg.error));
         return oFAIL;
     }
-    conn_.sendBuffer = sendBufMsg.buffer;
-    conn_.sendBuffer.Map();
-    conn_.sendData = (byte*)conn_.sendBuffer.GetAddress();
+    conn.sendBuffer = sendBufMsg.buffer;
+    conn.sendBuffer.Map();
+    conn.sendData = (byte*)conn.sendBuffer.GetAddress();
 
     antEnvCreateSharedBufferMsg recvBufMsg(CONSOLE_BUFSIZE);
-    recvBufMsg.Call(ipstackRef_, sizeof(recvBufMsg));
+    recvBufMsg.Call(ipstackRef, sizeof(recvBufMsg));
     if (recvBufMsg.error != ANT_SUCCESS) {
         OSYSLOG1((osyslogERROR, "TinyConsole: can't alloc recv buffer %d", recvBufMsg.error));
         return oFAIL;
     }
-    conn_.recvBuffer = recvBufMsg.buffer;
-    conn_.recvBuffer.Map();
-    conn_.recvData = (byte*)conn_.recvBuffer.GetAddress();
+    conn.recvBuffer = recvBufMsg.buffer;
+    conn.recvBuffer.Map();
+    conn.recvData = (byte*)conn.recvBuffer.GetAddress();
     
     if (subject[sbjMove]->IsReady() == true) {
         double cur[NUM_JOINTS];
         ReadCurrentPose(cur);
         SetupInterpolation(cur, SLEEPING_POSE_3, STARTUP_COUNTER);
-        SetJointGain(); // Or should be after SetupInterpolation
-		motionState_ = MSTATE_STARTUP;
+        SetJointGain(); // Position of this function is important as if it isn't called at the "good" time, 
+        // joints won't move at all when receiving commands
+		motionState = MSTATE_STARTUP;
 		AdvanceInterpolation(STARTUP_COUNTER);
     } else {
-        motionState_ = MSTATE_IDLE;
+        motionState = MSTATE_IDLE;
     }
 
     ENABLE_ALL_SUBJECT;
@@ -384,8 +388,8 @@ TinyConsole::DoStop(const OSystemEvent& event)
 {
     OSYSDEBUG(("TinyConsole::DoStop()\n"));
 
-    motionState_ = MSTATE_IDLE;
-    pendingCmd_  = MCMD_NONE;
+    motionState = MSTATE_IDLE;
+    pendingCmd  = MCMD_NONE;
 
     DISABLE_ALL_SUBJECT;
     DEASSERT_READY_TO_ALL_OBSERVER;
@@ -407,7 +411,7 @@ TinyConsole::DoDestroy(const OSystemEvent& event)
 //  has consumed the last command-vector frame we sent.  This drives
 //  the motion state machine one step forward.
 //
-//  A pending TCP command (pendingCmd_) is applied at the start of
+//  A pending TCP command (pendingCmd) is applied at the start of
 //  each callback so that new commands interrupt walking on the next
 //  phase boundary clean and glitch-free.
 // ================================================================
@@ -415,22 +419,22 @@ TinyConsole::DoDestroy(const OSystemEvent& event)
 void
 TinyConsole::Ready(const OReadyEvent& event)
 {
-    OSYSDEBUG(("TinyConsole::Ready() state=%d\n", (int)motionState_));
+    OSYSDEBUG(("TinyConsole::Ready() state=%d\n", (int)motionState));
 
     // ---- Apply any pending TCP command --------------------------------
-    if (pendingCmd_ != MCMD_NONE) {
-        MotionCmd cmd = pendingCmd_;
-        pendingCmd_   = MCMD_NONE;
+    if (pendingCmd != MCMD_NONE) {
+        MotionCmd cmd = pendingCmd;
+        pendingCmd   = MCMD_NONE;
         BeginMotion(cmd);
         // Fall through so the switch below sends the very first frame.
     }
 
     // ---- Advance the current motion phase -----------------------------
-    switch (motionState_) {
+    switch (motionState) {
 
 		case MSTATE_STARTUP:
 			if (AdvanceInterpolation(STARTUP_COUNTER) == MOVING_FINISH)
-				motionState_ = MSTATE_IDLE;
+				motionState = MSTATE_IDLE;
 			break;
 
         case MSTATE_IDLE:
@@ -441,142 +445,142 @@ TinyConsole::Ready(const OReadyEvent& event)
         case MSTATE_GETUP_PREP:
         	if (AdvanceInterpolation(GETUP_COUNTER) == MOVING_FINISH) {
         		SetupInterpolation(RISING_POSE_0, RISING_POSE_1, GETUP_COUNTER);
-        		motionState_ = MSTATE_GETUP_PREP_1;
+        		motionState = MSTATE_GETUP_PREP_1;
 			}
 			break;
 			
 		case MSTATE_GETUP_PREP_1:
         	if (AdvanceInterpolation(GETUP_COUNTER) == MOVING_FINISH) {
         		SetupInterpolation(RISING_POSE_1, RISING_POSE_2, GETUP_COUNTER);
-        		motionState_ = MSTATE_GETUP_PREP_2;
+        		motionState = MSTATE_GETUP_PREP_2;
 			}
 			break;
 
 		case MSTATE_GETUP_PREP_2:
         	if (AdvanceInterpolation(GETUP_COUNTER) == MOVING_FINISH) {
         		SetupInterpolation(RISING_POSE_2, RISING_POSE_3, GETUP_COUNTER);
-        		motionState_ = MSTATE_GETUP_PREP_3;
+        		motionState = MSTATE_GETUP_PREP_3;
 			}
 			break;
 
 		case MSTATE_GETUP_PREP_3:
         	if (AdvanceInterpolation(GETUP_COUNTER) == MOVING_FINISH) {
         		SetupInterpolation(RISING_POSE_3, BROADBASE_POSE, GETUP_COUNTER);
-        		motionState_ = MSTATE_GETUP;
+        		motionState = MSTATE_GETUP;
 			}
 			break;
 		
 
         case MSTATE_GETUP:
             if (AdvanceInterpolation(GETUP_COUNTER) == MOVING_FINISH)
-                motionState_ = MSTATE_IDLE;
+                motionState = MSTATE_IDLE;
             break;
 	
 		case MSTATE_PREPA_REST_0:
 			if (AdvanceInterpolation(REST_COUNTER) == MOVING_FINISH) {
         		SetupInterpolation(SLEEPING_POSE_0, SLEEPING_POSE_1, REST_COUNTER);
-        		motionState_ = MSTATE_PREPA_REST_1;
+        		motionState = MSTATE_PREPA_REST_1;
 			}
 			break;
 
 		case MSTATE_PREPA_REST_1:
 			if (AdvanceInterpolation(REST_COUNTER) == MOVING_FINISH) {
         		SetupInterpolation(SLEEPING_POSE_1, SLEEPING_POSE_2, REST_COUNTER);
-        		motionState_ = MSTATE_PREPA_REST_2;
+        		motionState = MSTATE_PREPA_REST_2;
 			}
 			break;
 		
 		case MSTATE_PREPA_REST_2:
 			if (AdvanceInterpolation(REST_COUNTER) == MOVING_FINISH) {
         		SetupInterpolation(SLEEPING_POSE_2, SLEEPING_POSE_3, REST_COUNTER);
-        		motionState_ = MSTATE_REST;
+        		motionState = MSTATE_REST;
 			}
 			break;
 
 		
         case MSTATE_REST:
             if (AdvanceInterpolation(REST_COUNTER) == MOVING_FINISH)
-                motionState_ = MSTATE_IDLE;
+                motionState = MSTATE_IDLE;
             break;
 
         // Walk phases alternate: A B C D E F G H until interrupted.
         case MSTATE_WALK_A:
             if (AdvanceInterpolation(WALK_COUNTER) == MOVING_FINISH) {
-                const double* from = walkForward_ ? WALK_FWD_A  : WALK_BACK_A;
-                const double* to   = walkForward_ ? WALK_FWD_B  : WALK_BACK_B;
+                const double* from = walkForward? WALK_FWD_A  : WALK_BACK_A;
+                const double* to   = walkForward? WALK_FWD_B  : WALK_BACK_B;
                 SetupInterpolation(from, to, WALK_COUNTER);
-                motionState_ = MSTATE_WALK_B;
+                motionState = MSTATE_WALK_B;
             }
             break;
 
         case MSTATE_WALK_B:
             if (AdvanceInterpolation(WALK_COUNTER) == MOVING_FINISH) {
-                const double* from = walkForward_ ? WALK_FWD_B  : WALK_BACK_B;
-                const double* to   = walkForward_ ? WALK_FWD_C  : WALK_BACK_C;
+                const double* from = walkForward? WALK_FWD_B  : WALK_BACK_B;
+                const double* to   = walkForward? WALK_FWD_C  : WALK_BACK_C;
                 SetupInterpolation(from, to, WALK_COUNTER);
-                motionState_ = MSTATE_WALK_C;
+                motionState = MSTATE_WALK_C;
             }
             break;
 
         case MSTATE_WALK_C:
             if (AdvanceInterpolation(WALK_COUNTER) == MOVING_FINISH) {
-                const double* from = walkForward_ ? WALK_FWD_C  : WALK_BACK_C;
-                const double* to   = walkForward_ ? WALK_FWD_D  : WALK_BACK_D;
+                const double* from = walkForward? WALK_FWD_C  : WALK_BACK_C;
+                const double* to   = walkForward? WALK_FWD_D  : WALK_BACK_D;
                 SetupInterpolation(from, to, WALK_COUNTER);
-			motionState_ = MSTATE_WALK_D;
+			motionState = MSTATE_WALK_D;
             }
             break;
 
         case MSTATE_WALK_D:
             if (AdvanceInterpolation(WALK_COUNTER) == MOVING_FINISH) {
-                const double* from = walkForward_ ? WALK_FWD_D  : WALK_BACK_D;
-                const double* to   = walkForward_ ? WALK_FWD_E  : WALK_BACK_E;
+                const double* from = walkForward? WALK_FWD_D  : WALK_BACK_D;
+                const double* to   = walkForward? WALK_FWD_E  : WALK_BACK_E;
                 SetupInterpolation(from, to, WALK_COUNTER);
-                motionState_ = MSTATE_WALK_E;
+                motionState = MSTATE_WALK_E;
             }
             break;
 
 		case MSTATE_WALK_E:
             if (AdvanceInterpolation(WALK_COUNTER) == MOVING_FINISH) {
-                const double* from = walkForward_ ? WALK_FWD_E  : WALK_BACK_E;
-                const double* to   = walkForward_ ? WALK_FWD_F  : WALK_BACK_F;
+                const double* from = walkForward? WALK_FWD_E  : WALK_BACK_E;
+                const double* to   = walkForward? WALK_FWD_F  : WALK_BACK_F;
                 SetupInterpolation(from, to, WALK_COUNTER);
-                motionState_ = MSTATE_WALK_F;
+                motionState = MSTATE_WALK_F;
             }
             break;
          
 		case MSTATE_WALK_F:
             if (AdvanceInterpolation(WALK_COUNTER) == MOVING_FINISH) {
-                const double* from = walkForward_ ? WALK_FWD_F  : WALK_BACK_F;
-                const double* to   = walkForward_ ? WALK_FWD_G  : WALK_BACK_G;
+                const double* from = walkForward? WALK_FWD_F  : WALK_BACK_F;
+                const double* to   = walkForward? WALK_FWD_G  : WALK_BACK_G;
                 SetupInterpolation(from, to, WALK_COUNTER);
-                motionState_ = MSTATE_WALK_G;
+                motionState = MSTATE_WALK_G;
             }
             break;
 
 		case MSTATE_WALK_G:
             if (AdvanceInterpolation(WALK_COUNTER) == MOVING_FINISH) {
-                const double* from = walkForward_ ? WALK_FWD_G  : WALK_BACK_G;
-                const double* to   = walkForward_ ? WALK_FWD_H  : WALK_BACK_H;
+                const double* from = walkForward? WALK_FWD_G  : WALK_BACK_G;
+                const double* to   = walkForward? WALK_FWD_H  : WALK_BACK_H;
                 SetupInterpolation(from, to, WALK_COUNTER);
-                motionState_ = MSTATE_WALK_H;
+                motionState = MSTATE_WALK_H;
             }
             break;
 
 
 		case MSTATE_WALK_H:
             if (AdvanceInterpolation(WALK_COUNTER) == MOVING_FINISH) {
-                const double* from = walkForward_ ? WALK_FWD_H  : WALK_BACK_H;
-                const double* to   = walkForward_ ? WALK_FWD_A  : WALK_BACK_A;
+                const double* from = walkForward? WALK_FWD_H  : WALK_BACK_H;
+                const double* to   = walkForward? WALK_FWD_A  : WALK_BACK_A;
                 SetupInterpolation(from, to, WALK_COUNTER);
-                motionState_ = MSTATE_WALK_A;
+                motionState = MSTATE_WALK_A;
             }
             break;
 
 
         case MSTATE_TO_BASE:
             if (AdvanceInterpolation(STOP_COUNTER) == MOVING_FINISH)
-                motionState_ = MSTATE_IDLE;
+                motionState = MSTATE_IDLE;
             break;
     }
 }
@@ -602,10 +606,10 @@ TinyConsole::ListenCont(ANTENVMSG msg)
         return;
     }
 
-    conn_.state   = CONNECTION_CONNECTED;
-    pendingClose_ = false;
-    handshakeDone_ = false;
-    recvPhase_    = 0;
+    conn.state   = CONNECTION_CONNECTED;
+    pendingClose= false;
+    handshakeStage= HS_BANNER_SENT;
+    recvPhase   = 0;
 
     // Build 12-byte session nonce:
     //   [0..3]  session ID (LE) monotone per boot, resets on reboot
@@ -614,34 +618,36 @@ TinyConsole::ListenCont(ANTENVMSG msg)
     uint32_t sid  = (uint32_t)sessionId_++;
     uint32_t addr = listenMsg->fAddress.Address();
 
-    sessionNonce_[0] = (uint8_t)( sid         & 0xFF);
-    sessionNonce_[1] = (uint8_t)((sid >>  8)  & 0xFF);
-    sessionNonce_[2] = (uint8_t)((sid >> 16)  & 0xFF);
-    sessionNonce_[3] = (uint8_t)((sid >> 24)  & 0xFF);
-    sessionNonce_[4] = (uint8_t)( addr        & 0xFF);
-    sessionNonce_[5] = (uint8_t)((addr >>  8) & 0xFF);
-    sessionNonce_[6] = (uint8_t)((addr >> 16) & 0xFF);
-    sessionNonce_[7] = (uint8_t)((addr >> 24) & 0xFF);
-    sessionNonce_[8] = sessionNonce_[9] = sessionNonce_[10] = sessionNonce_[11] = 0;
+    sessionNonce[0] = (uint8_t)( sid         & 0xFF);
+    sessionNonce[1] = (uint8_t)((sid >>  8)  & 0xFF);
+    sessionNonce[2] = (uint8_t)((sid >> 16)  & 0xFF);
+    sessionNonce[3] = (uint8_t)((sid >> 24)  & 0xFF);
+    sessionNonce[4] = (uint8_t)( addr        & 0xFF);
+    sessionNonce[5] = (uint8_t)((addr >>  8) & 0xFF);
+    sessionNonce[6] = (uint8_t)((addr >> 16) & 0xFF);
+    sessionNonce[7] = (uint8_t)((addr >> 24) & 0xFF);
+    sessionNonce[8] = sessionNonce[9] = sessionNonce[10] = sessionNonce[11] = 0;
 
-    txCounter_ = 0;
-    rxCounter_ = 0;
+    memcpy(serverNonceSent, sessionNonce, NONCE_SIZE);
 
-    // Send plaintext banner + raw nonce (26 bytes total).
+    txCounter= 0;
+    rxCounter= 0;
+
+    // Send plaintext banner + raw nonce
     const char* banner    = CONSOLE_BANNER;
     int         bannerLen = (int)strlen(banner);
 
-    memcpy(conn_.sendData,             banner,        bannerLen);
-    memcpy(conn_.sendData + bannerLen, sessionNonce_, NONCE_SIZE);
-    conn_.sendSize = bannerLen + NONCE_SIZE;
+    memcpy(conn.sendData,             banner,        bannerLen);
+    memcpy(conn.sendData + bannerLen, sessionNonce, NONCE_SIZE);
+    conn.sendSize = bannerLen + NONCE_SIZE;
 
-    TCPEndpointSendMsg sendMsg(conn_.endpoint,
-                               conn_.sendData, conn_.sendSize);
+    TCPEndpointSendMsg sendMsg(conn.endpoint,
+                               conn.sendData, conn.sendSize);
     sendMsg.continuation = (void*)0;
-    sendMsg.Send(ipstackRef_, myOID_,
+    sendMsg.Send(ipstackRef, myOID,
                  Extra_Entry[entrySendCont], sizeof(sendMsg));
-    conn_.state    = CONNECTION_SENDING;
-    conn_.sendSize = 0;
+    conn.state    = CONNECTION_SENDING;
+    conn.sendSize = 0;
 }
 
 void
@@ -659,21 +665,37 @@ TinyConsole::SendCont(ANTENVMSG msg)
         return;
     }
 
-    conn_.state = CONNECTION_CONNECTED;
+    conn.state = CONNECTION_CONNECTED;
 
     if (pendingClose_) {
-        pendingClose_ = false;
+        pendingClose= false;
         Close();
         return;
     }
-	
-	if (!handshakeDone_) {
-		recvPhase_ = 2;
-    	Receive(NONCE_SIZE, NONCE_SIZE);	
-	} else {
-		recvPhase_ = 0;
-    	Receive(FRAME_HEADER_SIZE, FRAME_HEADER_SIZE);	
-	}
+
+    switch (handshakeStage_) {
+
+        case HS_BANNER_SENT:
+            // Just sent banner+nonce; wait for the client's nonce.
+            recvPhase= 1;
+            Receive(NONCE_SIZE, NONCE_SIZE);
+            break;
+
+        case HS_SIG_SENT:
+            // Just sent our handshake signature. The client verifies it
+            // before sending anything further, so from here on this is
+            // ordinary AEAD traffic.
+            handshakeStage= HS_ESTABLISHED;
+            recvPhase= 2;
+            Receive(FRAME_HEADER_SIZE, FRAME_HEADER_SIZE);
+            break;
+
+        case HS_ESTABLISHED:
+            // Just sent an ordinary encrypted response.
+            recvPhase= 2;
+            Receive(FRAME_HEADER_SIZE, FRAME_HEADER_SIZE);
+            break;
+    }
 }
 
 void
@@ -681,7 +703,7 @@ TinyConsole::ReceiveCont(ANTENVMSG msg)
 {
     TCPEndpointReceiveMsg* recvMsg = (TCPEndpointReceiveMsg*)antEnvMsg::Receive(msg);
 
-    OSYSDEBUG(("TinyConsole::ReceiveCont() phase=%d n=%d\n", recvPhase_, recvMsg->sizeMin));
+    OSYSDEBUG(("TinyConsole::ReceiveCont() phase=%d n=%d\n", recvPhase, recvMsg->sizeMin));
 
     if (recvMsg->error == TCP_CONNECTION_CLOSED) {
         OSYSPRINT(("TinyConsole: client disconnected\n"));
@@ -694,70 +716,21 @@ TinyConsole::ReceiveCont(ANTENVMSG msg)
         return;
     }
 	
-    conn_.state = CONNECTION_CONNECTED;
+    conn.state = CONNECTION_CONNECTED;
     int n = recvMsg->sizeMin;
 
-	// ------------------------------------------------------------------
-	// Phase 2 - client nonce (12 bytes, plaintext, handshake only)
-	// Will need to rename/change numbering of phases
-	// ------------------------------------------------------------------
-	if (recvPhase_ == 2) {
-		if (n < NONCE_SIZE) {
-			OSYSLOG1((osyslogERROR, "TinyConsole: short client nonce (%d bytes)", n));
-			Close();
-			return;
-		}
-		// XOR client contribution into bytes [0..7]
-		// Bytes [8..11] are counter-controlled (AdvanceNonce overwrites them
-		// before evry encrypt/decrypt call), so only 0..7 matter here.
-		for (int i = 0; i < 8; i++)
-			sessionNonce_[i] ^= (uint8_t)conn_.recvData[i];
-			
-		// Dervie fresh 32-byte AEAD key for this session with HChaCha20
-		// Input: master key + 16-byte HChaCha20 input built from the session prefix
-		// (bytes [0..7]) padded with zeros to 16 bytes
-		// sessionNonce_[8..11] are counter-controlled and not yeat meaningful
-		
-		{
-			ECRYPT_ctx hctx;
-			// [8..15] remain 0 -> reserved for futur domain separation if needed
-			ECRYPT_keysetup(&hctx, (const u8*)CHACHA_KEY, 256, 16);
-			
-			hctx.input[12] =   (uint32_t)sessionNonce_[0]
-							| ((uint32_t)sessionNonce_[1] << 8)
-							| ((uint32_t)sessionNonce_[2] << 16)
-							| ((uint32_t)sessionNonce_[3] << 24);
-			
-			hctx.input[13] =   (uint32_t)sessionNonce_[4]
-							| ((uint32_t)sessionNonce_[5] << 8)
-							| ((uint32_t)sessionNonce_[6] << 16)
-							| ((uint32_t)sessionNonce_[7] << 24);
-			
-			hctx.input[14] = 0;
-			hctx.input[15] = 0;
-			
-			hchacha20(&hctx, sessionKey_);
-		}
-		
-		handshakeDone_ = true;
-		recvPhase_ = 0;
-		Receive(FRAME_HEADER_SIZE, FRAME_HEADER_SIZE);
-		return;
-	}
-
-
     // ------------------------------------------------------------------
-    //  Phase 0 2-byte frame header
+    //  Phase 1 -> 2-byte frame header
     // ------------------------------------------------------------------
-    if (recvPhase_ == 0) {
+    if (recvPhase== 1) {
         if (n < FRAME_HEADER_SIZE) {
             OSYSLOG1((osyslogERROR, "TinyConsole: short frame header (%d bytes)", n));
             Close();
             return;
         }
 
-        uint16_t ctLen = (uint16_t)( (unsigned char)conn_.recvData[0]        )
-                       | (uint16_t)(((unsigned char)conn_.recvData[1]) << 8  );
+        uint16_t ctLen = (uint16_t)( (unsigned char)conn.recvData[0]        )
+                       | (uint16_t)(((unsigned char)conn.recvData[1]) << 8  );
 
         if (ctLen == 0 || ctLen > (uint16_t)CONSOLE_MAX_PLAINTEXT) {
             OSYSLOG1((osyslogERROR,
@@ -766,16 +739,52 @@ TinyConsole::ReceiveCont(ANTENVMSG msg)
             return;
         }
 
-        pendingFrameLen_ = ctLen;
-        recvPhase_       = 1;
+        pendingFrameLen= ctLen;
+        recvPhase      = 2;
         Receive((int)ctLen + FRAME_TAG_SIZE, (int)ctLen + FRAME_TAG_SIZE);
         return;
     }
 
     // ------------------------------------------------------------------
-    //  Phase 1 AEAD body (ciphertext + 16-byte tag)
+	// Phase 2 -> client nonce (12 bytes, plaintext, handshake only)
+	// ------------------------------------------------------------------
+	if (recvPhase== 2) {
+		if (n < NONCE_SIZE) {
+			OSYSLOG1((osyslogERROR, "TinyConsole: short client nonce (%d bytes)", n));
+			Close();
+			return;
+		}
+
+		// Keep a copy of the client's raw contribution before touching
+		// it as the handshake signature needs it, and conn.recvData
+		// will be reused for the next receive once we call Receive() again.
+		uint8_t clientNonce[NONCE_SIZE];
+		memcpy(clientNonce, conn.recvData, NONCE_SIZE);
+
+		// XOR client contribution into bytes [0..7]
+		// Bytes [8..11] are counter-controlled (AdvanceNonce overwrites them
+		// before evry encrypt/decrypt call), so only 0..7 matter here.
+		for (int i = 0; i < 8; i++)
+			sessionNonce[i] ^= clientNonce[i];
+
+		// Prove we hold ROBOT_ED25519_SK before the client trusts this session.
+		uint8_t sig[HANDSHAKE_SIG_SIZE];
+		if (!SignHandshake(clientNonce, sig)) {
+			OSYSLOG1((osyslogERROR, "TinyConsole: handshake signing failed"));
+			Close();
+			return;
+		}
+
+		memcpy(conn.sendData, sig, HANDSHAKE_SIG_SIZE);
+		handshakeStage= HS_SIG_SENT;
+		Send(conn.sendData, HANDSHAKE_SIG_SIZE);
+		return;
+	}
+
     // ------------------------------------------------------------------
-    int bodyLen = (int)pendingFrameLen_ + FRAME_TAG_SIZE;
+    //  AEAD body (ciphertext + 16-byte tag)
+    // ------------------------------------------------------------------
+    int bodyLen = (int)pendingFrameLen+ FRAME_TAG_SIZE;
     if (n < bodyLen) {
         OSYSLOG1((osyslogERROR,
                   "TinyConsole: short frame body (got %d, expected %d)",
@@ -785,15 +794,15 @@ TinyConsole::ReceiveCont(ANTENVMSG msg)
     }
 
     int ptLen = 0;
-    if (!AeadDecrypt(conn_.recvData, bodyLen, conn_.recvData, &ptLen)) {
+    if (!AeadDecrypt(conn.recvData, bodyLen, conn.recvData, &ptLen)) {
         Close();
         return;
     }
 
-    if (ptLen < CONSOLE_BUFSIZE) conn_.recvData[ptLen] = '\0';
+    if (ptLen < CONSOLE_BUFSIZE) conn.recvData[ptLen] = '\0';
 
     // Strip trailing CR/LF in-place.
-    char* cmd    = (char*)conn_.recvData;
+    char* cmd    = (char*)conn.recvData;
     int   cmdLen = ptLen;
     while (cmdLen > 0 &&
            (cmd[cmdLen-1] == '\r' || cmd[cmdLen-1] == '\n'))
@@ -802,8 +811,8 @@ TinyConsole::ReceiveCont(ANTENVMSG msg)
     // ------------------------------------------------------------------
     //  Command dispatch
     //
-    //  Motion commands are ASYNCHRONOUS: we respond immediately and
-    //  set pendingCmd_.  The motion state machine picks it up at the
+    //  Motion commands are ASYNCHRONOUS: responses are sent immediately and
+    //  set pendingCmd.  The motion state machine picks it up at the
     //  next Ready() call (triggered by TriggerReady() if currently idle).
     // ------------------------------------------------------------------
     const char* response = "OK\n";
@@ -815,44 +824,50 @@ TinyConsole::ReceiveCont(ANTENVMSG msg)
         response = "PONG\n";
 
     } else if (!strncmp(cmd, "GET_UP", 6)) {
-        pendingCmd_ = MCMD_GETUP;
+        pendingCmd= MCMD_GETUP;
         TriggerReady();
         response = "STANDING_UP\n";
 
     } else if (!strncmp(cmd, "REST", 4)) {
-        pendingCmd_ = MCMD_REST;
+        pendingCmd= MCMD_REST;
         TriggerReady();
         response = "RESTING\n";
 
     } else if (!strncmp(cmd, "FORWARD", 7)) {
-        pendingCmd_ = MCMD_FORWARD;
+        pendingCmd= MCMD_FORWARD;
         TriggerReady();
         response = "MOVING_FORWARD\n";
 
     } else if (!strncmp(cmd, "BACK", 4)) {
-        pendingCmd_ = MCMD_BACK;
+        pendingCmd= MCMD_BACK;
         TriggerReady();
         response = "MOVING_BACK\n";
 
     } else if (!strncmp(cmd, "STOP", 4)) {
-        pendingCmd_ = MCMD_STOP;
+        pendingCmd= MCMD_STOP;
         TriggerReady();
         response = "STOPPING\n";
 
+    } else if (!strncmp(cmd, "HELP", 4)) {
+        response = "Available commands: PING, GET_UP, REST, FORWARD, BACK, STOP, HELP, QUIT\n";
+
+    } else if (!strncmp(cmd, "INFO", 4)) {        
+        response = "I am an AIBO robot from Sony, model ERS-7M3/T.\n I was born in Japan for the European market.\n";
+
     } else if (!strncmp(cmd, "QUIT", 4)) {
         response      = "BYE\n";
-        pendingClose_ = true;
+        pendingClose= true;
     }
 
     int frameLen = 0;
     if (!AeadEncrypt((const byte*)response, (int)strlen(response),
-                     conn_.sendData, &frameLen)) {
+                     conn.sendData, &frameLen)) {
         OSYSLOG1((osyslogERROR, "TinyConsole: AeadEncrypt failed"));
         Close();
         return;
     }
 
-    Send(conn_.sendData, frameLen);
+    Send(conn.sendData, frameLen);
 }
 
 void
@@ -863,7 +878,7 @@ TinyConsole::CloseCont(ANTENVMSG msg)
 
     OSYSDEBUG(("TinyConsole::CloseCont()\n"));
 
-    conn_.state = CONNECTION_CLOSED;
+    conn.state = CONNECTION_CLOSED;
     Listen();
 }
 
@@ -876,23 +891,23 @@ TinyConsole::Listen()
 {
     OSYSDEBUG(("TinyConsole::Listen()\n"));
 
-    if (conn_.state != CONNECTION_CLOSED) return oFAIL;
+    if (conn.state != CONNECTION_CLOSED) return oFAIL;
 
     antEnvCreateEndpointMsg tcpCreateMsg(EndpointType_TCP, CONSOLE_BUFSIZE * 2);
-    tcpCreateMsg.Call(ipstackRef_, sizeof(tcpCreateMsg));
+    tcpCreateMsg.Call(ipstackRef, sizeof(tcpCreateMsg));
     if (tcpCreateMsg.error != ANT_SUCCESS) {
         OSYSLOG1((osyslogERROR, "TinyConsole::Listen endpoint FAIL %d",
                   tcpCreateMsg.error));
         return oFAIL;
     }
-    conn_.endpoint = tcpCreateMsg.moduleRef;
+    conn.endpoint = tcpCreateMsg.moduleRef;
 
-    TCPEndpointListenMsg listenMsg(conn_.endpoint, IP_ADDR_ANY, CONSOLE_PORT);
+    TCPEndpointListenMsg listenMsg(conn.endpoint, IP_ADDR_ANY, CONSOLE_PORT);
     listenMsg.continuation = (void*)0;
-    listenMsg.Send(ipstackRef_, myOID_,
+    listenMsg.Send(ipstackRef, myOID,
                    Extra_Entry[entryListenCont], sizeof(listenMsg));
 
-    conn_.state = CONNECTION_LISTENING;
+    conn.state = CONNECTION_LISTENING;
     OSYSPRINT(("TinyConsole: listening on port %d\n", CONSOLE_PORT));
     return oSUCCESS;
 }
@@ -900,60 +915,60 @@ TinyConsole::Listen()
 OStatus
 TinyConsole::Send(const byte* /*data*/, int size)
 {
-    if (conn_.state != CONNECTION_CONNECTED) {
+    if (conn.state != CONNECTION_CONNECTED) {
         OSYSLOG1((osyslogERROR, "TinyConsole::Send called in wrong state %d",
-                  conn_.state));
+                  conn.state));
         return oFAIL;
     }
 
-    TCPEndpointSendMsg sendMsg(conn_.endpoint, conn_.sendData, size);
+    TCPEndpointSendMsg sendMsg(conn.endpoint, conn.sendData, size);
     sendMsg.continuation = (void*)0;
-    sendMsg.Send(ipstackRef_, myOID_,
+    sendMsg.Send(ipstackRef, myOID,
                  Extra_Entry[entrySendCont],
                  sizeof(TCPEndpointSendMsg));
 
-    conn_.state    = CONNECTION_SENDING;
-    conn_.sendSize = 0;
+    conn.state    = CONNECTION_SENDING;
+    conn.sendSize = 0;
     return oSUCCESS;
 }
 
 OStatus
 TinyConsole::Receive(int sizeMin, int sizeMax)
 {
-    if (conn_.state != CONNECTION_CONNECTED) {
+    if (conn.state != CONNECTION_CONNECTED) {
         OSYSLOG1((osyslogERROR, "TinyConsole::Receive called in wrong state %d",
-                  conn_.state));
+                  conn.state));
         return oFAIL;
     }
 
-    TCPEndpointReceiveMsg recvMsg(conn_.endpoint,
-                                  conn_.recvData, sizeMin, sizeMax);
+    TCPEndpointReceiveMsg recvMsg(conn.endpoint,
+                                  conn.recvData, sizeMin, sizeMax);
     recvMsg.continuation = (void*)0;
-    recvMsg.Send(ipstackRef_, myOID_,
+    recvMsg.Send(ipstackRef, myOID,
                  Extra_Entry[entryReceiveCont], sizeof(recvMsg));
 
-    conn_.state    = CONNECTION_RECEIVING;
-    conn_.recvSize = 0;
+    conn.state    = CONNECTION_RECEIVING;
+    conn.recvSize = 0;
     return oSUCCESS;
 }
 
 OStatus
 TinyConsole::Close()
 {
-    if (conn_.state == CONNECTION_CLOSED ||
-        conn_.state == CONNECTION_CLOSING) return oFAIL;
+    if (conn.state == CONNECTION_CLOSED ||
+        conn.state == CONNECTION_CLOSING) return oFAIL;
 
-    TCPEndpointCloseMsg closeMsg(conn_.endpoint);
+    TCPEndpointCloseMsg closeMsg(conn.endpoint);
     closeMsg.continuation = (void*)0;
-    closeMsg.Send(ipstackRef_, myOID_,
+    closeMsg.Send(ipstackRef, myOID,
                   Extra_Entry[entryCloseCont], sizeof(closeMsg));
 
-    conn_.state = CONNECTION_CLOSING;
+    conn.state = CONNECTION_CLOSING;
     return oSUCCESS;
 }
 
 // ================================================================
-//  AEAD helpers  (unchanged from original TinyConsole)
+//  AEAD helpers
 // ================================================================
 
 void
@@ -961,10 +976,10 @@ TinyConsole::AdvanceNonce(uint32_t& counter, bool isTx)
 {
     uint32_t mc = counter++;
     mc |= (isTx ? (1U << 31) : 0);
-    sessionNonce_[8]  = (uint8_t)( mc        & 0xFF);
-    sessionNonce_[9]  = (uint8_t)((mc >>  8) & 0xFF);
-    sessionNonce_[10] = (uint8_t)((mc >> 16) & 0xFF);
-    sessionNonce_[11] = (uint8_t)((mc >> 24) & 0xFF);
+    sessionNonce[8]  = (uint8_t)( mc        & 0xFF);
+    sessionNonce[9]  = (uint8_t)((mc >>  8) & 0xFF);
+    sessionNonce[10] = (uint8_t)((mc >> 16) & 0xFF);
+    sessionNonce[11] = (uint8_t)((mc >> 24) & 0xFF);
 }
 
 bool
@@ -977,10 +992,10 @@ TinyConsole::AeadEncrypt(const byte* plaintext, int ptLen,
         return false;
     }
 
-    AdvanceNonce(txCounter_, true);
+    AdvanceNonce(txCounter, true);
 
     chacha20poly1305_ctx ctx;
-    rfc7539_init(&ctx, sessionKey_, sessionNonce_);
+    rfc7539_init(&ctx, (uint8_t*)CHACHA_KEY, sessionNonce_);
 
     frameOut[0] = (uint8_t)( ptLen       & 0xFF);
     frameOut[1] = (uint8_t)((ptLen >> 8) & 0xFF);
@@ -1012,10 +1027,10 @@ TinyConsole::AeadDecrypt(const byte* frame, int frameLen,
         return false;
     }
 
-    AdvanceNonce(rxCounter_, false);
+    AdvanceNonce(rxCounter, false);
 
     chacha20poly1305_ctx ctx;
-    rfc7539_init(&ctx, sessionKey_, sessionNonce_);
+    rfc7539_init(&ctx, (uint8_t*)CHACHA_KEY, sessionNonce_);
 	
 	uint8_t frame_header_bytes[FRAME_HEADER_SIZE];
 	frame_header_bytes[0] = (uint8_t)( ctLen & 0xFF);
@@ -1049,6 +1064,54 @@ TinyConsole::AeadDecrypt(const byte* frame, int frameLen,
 }
 
 // ================================================================
+//  Handshake signing (Ed25519 / TweetNaCl)
+//
+//  Authenticates the robot to the client: proves this endpoint holds
+//  ROBOT_ED25519_SK, which is never shared with clients (unlike CHACHA_KEY).
+// ================================================================
+
+bool
+TinyConsole::SignHandshake(const uint8_t* clientNonce,
+                            uint8_t sigOut[HANDSHAKE_SIG_SIZE])
+{
+    // Transcript = context || our raw nonce as sent || client's raw nonce
+    // as received. Both nonces are already fully public (sent in the
+    // clear during the handshake) thus signing them just proves *this*
+    // robot produced/accepted *this* exchange.
+    uint8_t msg[HANDSHAKE_CONTEXT_LEN + NONCE_SIZE + NONCE_SIZE];
+    memcpy(msg, HANDSHAKE_CONTEXT, HANDSHAKE_CONTEXT_LEN);
+    memcpy(msg + HANDSHAKE_CONTEXT_LEN, serverNonceSent, NONCE_SIZE);
+    memcpy(msg + HANDSHAKE_CONTEXT_LEN + NONCE_SIZE, clientNonce, NONCE_SIZE);
+
+    // crypto_sign() is TweetNaCl/NaCl's "combined" signing API: it
+    // writes (64-byte signature || a copy of msg) into sm. We only 
+    // send the first 64 bytes -> the client already has msg (it's the
+    // two nonces it just exchanged)
+    uint8_t sm[sizeof(msg) + HANDSHAKE_SIG_SIZE];
+    unsigned long long smlen = 0;
+
+    if (crypto_sign(sm, &smlen, msg, sizeof(msg),
+                    (const unsigned char*)ROBOT_ED25519_SK) != 0) {
+        return false;
+    }
+
+    memcpy(sigOut, sm, HANDSHAKE_SIG_SIZE);
+    return true;
+}
+
+// TweetNaCl declares "randombytes" extern and calls it internally from
+// crypto_sign_keypair() / crypto_box_keypair(). 
+// This only exists so the linker has something to resolve -> if it ever
+// actually runs, something upstream is badly wrong.
+extern "C" void
+randombytes(unsigned char* buf, unsigned long long n)
+{
+    OSYSLOG1((osyslogERROR,
+              "TinyConsole: randombytes() called -- should be unreachable"));
+    memset(buf, 0, n);
+}
+
+// ================================================================
 //  Motion helpers
 // ================================================================
 
@@ -1056,7 +1119,7 @@ void
 TinyConsole::OpenPrimitives()
 {
     for (int i = 0; i < NUM_JOINTS; i++) {
-        OStatus result = OPENR::OpenPrimitive(JOINT_LOCATOR[i], &jointID_[i]);
+        OStatus result = OPENR::OpenPrimitive(JOINT_LOCATOR[i], &jointID[i]);
         if (result != oSUCCESS) {
             OSYSLOG1((osyslogERROR,
                       "TinyConsole::OpenPrimitives() joint %d FAILED %d",
@@ -1082,7 +1145,7 @@ TinyConsole::NewCommandVectorData()
             continue;
         }
 
-        cmdRegion_[i] = new RCRegion(cmdVecData->vectorInfo.memRegionID,
+        cmdRegion[i] = new RCRegion(cmdVecData->vectorInfo.memRegionID,
                                      cmdVecData->vectorInfo.offset,
                                      (void*)cmdVecData,
                                      cmdVecData->vectorInfo.totalSize);
@@ -1091,7 +1154,7 @@ TinyConsole::NewCommandVectorData()
 
         for (int j = 0; j < NUM_JOINTS; j++) {
             OCommandInfo* info = cmdVecData->GetInfo(j);
-            info->Set(odataJOINT_COMMAND2, jointID_[j], ocommandMAX_FRAMES);
+            info->Set(odataJOINT_COMMAND2, jointID[j], ocommandMAX_FRAMES);
         }
     }
 }
@@ -1109,8 +1172,8 @@ TinyConsole::SetJointGain()
     for (int leg = 0; leg < 4; leg++) {
         for (int j = 0; j < 3; j++) {
             int idx = leg * 3 + j;
-            OPENR::EnableJointGain(jointID_[idx]);
-            OPENR::SetJointGain(jointID_[idx],
+            OPENR::EnableJointGain(jointID[idx]);
+            OPENR::SetJointGain(jointID[idx],
                                 pgain[j], igain[j], dgain[j],
                                 PID_PSHIFT, PID_ISHIFT, PID_DSHIFT);
         }
@@ -1121,8 +1184,8 @@ RCRegion*
 TinyConsole::FindFreeRegion()
 {
     for (int i = 0; i < NUM_CMD_VECTORS; i++) {
-        if (cmdRegion_[i] && cmdRegion_[i]->NumberOfReference() == 1)
-            return cmdRegion_[i];
+        if (cmdRegion[i] && cmdRegion[i]->NumberOfReference() == 1)
+            return cmdRegion[i];
     }
     return 0; // all regions currently in use
 }
@@ -1136,7 +1199,7 @@ TinyConsole::SetJointValue(RCRegion* rgn, int idx,
     OCommandVectorData* cmdVecData = (OCommandVectorData*)rgn->Base();
 
     OCommandInfo* info = cmdVecData->GetInfo(idx);
-    info->Set(odataJOINT_COMMAND2, jointID_[idx], ocommandMAX_FRAMES);
+    info->Set(odataJOINT_COMMAND2, jointID[idx], ocommandMAX_FRAMES);
 
     OCommandData*        data = cmdVecData->GetData(idx);
     OJointCommandValue2* jval = (OJointCommandValue2*)data->value;
@@ -1149,22 +1212,22 @@ TinyConsole::SetJointValue(RCRegion* rgn, int idx,
     }
 }
 
-// Initialise a linear interpolation from 'from[]' to 'to[]' over 'steps'
-// command-vector frames.  Resets motionCounter_ to 0.
+// Initialise a linear interpolation: 'from[]' -> 'to[]' over *steps*
+// command-vector frames.  Resets motionCounterto 0.
 void
 TinyConsole::SetupInterpolation(const double* from,
                                  const double* to,
                                  int           steps)
 {
     for (int i = 0; i < NUM_JOINTS; i++) {
-        motionStart_[i] = from[i];
-        motionDelta_[i] = (steps > 0) ? (to[i] - from[i]) / steps : 0.0;
+        motionStart[i] = from[i];
+        motionDelta[i] = (steps > 0) ? (to[i] - from[i]) / steps : 0.0;
     }
-    motionCounter_ = 0;
+    motionCounter= 0;
 }
 
 // Send one command-vector block at the current step of the interpolation,
-// advance motionCounter_, and notify observers.
+// advance motionCounter, and notify observers.
 // Returns MOVING_FINISH when the last step has been sent.
 MovingResult
 TinyConsole::AdvanceInterpolation(int maxSteps)
@@ -1179,8 +1242,8 @@ TinyConsole::AdvanceInterpolation(int maxSteps)
     int step = motionCounter_;
 
     for (int i = 0; i < NUM_JOINTS; i++) {
-        double cur = motionStart_[i] + motionDelta_[i] *  step;
-        double nxt = motionStart_[i] + motionDelta_[i] * (step + 1);
+        double cur = motionStart[i] + motionDelta[i] *  step;
+        double nxt = motionStart[i] + motionDelta[i] * (step + 1);
         SetJointValue(rgn, i, cur, nxt);
     }
 
@@ -1188,7 +1251,7 @@ TinyConsole::AdvanceInterpolation(int maxSteps)
     subject[sbjMove]->NotifyObservers();
 
     motionCounter_++;
-    return (motionCounter_ >= maxSteps) ? MOVING_FINISH : MOVING_CONT;
+    return (motionCounter>= maxSteps) ? MOVING_FINISH : MOVING_CONT;
 }
 
 // Read the current joint positions from hardware into outDeg[12].
@@ -1197,12 +1260,12 @@ TinyConsole::ReadCurrentPose(double* outDeg)
 {
     for (int i = 0; i < NUM_JOINTS; i++) {
         OJointValue jv;
-        OPENR::GetJointValue(jointID_[i], &jv);
+        OPENR::GetJointValue(jointID[i], &jv);
         outDeg[i] = degrees(jv.value / 1000000.0);
     }
 }
 
-// Set up interpolation parameters and transition motionState_ for the
+// Set up interpolation parameters and transition motionState for the
 // given command.  Does NOT send a frame; the caller's switch statement
 // will send the first frame on the same Ready() invocation.
 void
@@ -1216,35 +1279,35 @@ TinyConsole::BeginMotion(MotionCmd cmd)
         case MCMD_GETUP:
             OSYSPRINT(("TinyConsole: GET_UP\n"));
             SetupInterpolation(cur, RISING_POSE_0, GETUP_COUNTER);
-            motionState_ = MSTATE_GETUP_PREP;
+            motionState = MSTATE_GETUP_PREP;
             break;
 
         case MCMD_REST:
             OSYSPRINT(("TinyConsole: REST\n"));
             SetupInterpolation(cur, SLEEPING_POSE_0, REST_COUNTER);
-            motionState_ = MSTATE_PREPA_REST_1;
+            motionState = MSTATE_PREPA_REST_1;
             break;
 
 		case MCMD_FORWARD:
             OSYSPRINT(("TinyConsole: FORWARD walk\n"));
-            walkForward_ = true;
+            walkForward= true;
             SetupInterpolation(cur, WALK_FWD_A, WALK_COUNTER); // UPDATED COUNTER
-            motionState_ = MSTATE_WALK_A;
+            motionState = MSTATE_WALK_A;
             break;
 
         case MCMD_BACK:
             OSYSPRINT(("TinyConsole: BACK walk\n"));
-            walkForward_ = false;
+            walkForward= false;
             SetupInterpolation(cur, WALK_BACK_A, WALK_COUNTER); // UPDATED COUNTER
-            motionState_ = MSTATE_WALK_A;
+            motionState = MSTATE_WALK_A;
             break;
             
         case MCMD_STOP:
             OSYSPRINT(("TinyConsole: STOP\n"));
-            if (motionState_ != MSTATE_IDLE &&
-                motionState_ != MSTATE_TO_BASE) {
+            if (motionState != MSTATE_IDLE &&
+                motionState != MSTATE_TO_BASE) {
                 SetupInterpolation(cur, BROADBASE_POSE, STOP_COUNTER);
-                motionState_ = MSTATE_TO_BASE;
+                motionState = MSTATE_TO_BASE;
             }
             break;
 
@@ -1257,11 +1320,11 @@ TinyConsole::BeginMotion(MotionCmd cmd)
 // no-op "stay put" frame so that the OPEN-R scheduler will invoke Ready()
 // and pick up the newly set pendingCmd_.
 // If motion is already in progress, this is a no-op Ready() will handle
-// pendingCmd_ at the next phase boundary.
+// pendingCmdat the next phase boundary.
 void
 TinyConsole::TriggerReady()
 {
-    if (motionState_ != MSTATE_IDLE) return; // already active
+    if (motionState != MSTATE_IDLE) return; // already active
 
     double cur[NUM_JOINTS];
     ReadCurrentPose(cur);
@@ -1274,5 +1337,5 @@ TinyConsole::TriggerReady()
 
     subject[sbjMove]->SetData(rgn);
     subject[sbjMove]->NotifyObservers();
-    // motionState_ stays IDLE; the pending command is applied in Ready().
+    // motionState stays IDLE; the pending command is applied in Ready().
 }

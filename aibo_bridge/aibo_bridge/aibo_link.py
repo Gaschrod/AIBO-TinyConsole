@@ -11,10 +11,14 @@ Protocol recap (half-duplex, client always sends first):
   2. Server sends banner line + 12-byte session nonce (plaintext)
   3. Client sends 12-byte random nonce contribution (plaintext)
      → bytes [0..7] of both are XOR'd to form the session prefix
-  4. A per-session AEAD key is derived via:
-       HChaCha20(master_key, session_prefix || 0x00*8)
-     This mirrors the derivation in TinyConsole.cc ReceiveCont phase 2.
-     The master key is never used directly for encryption.
+  4. Server signs (HANDSHAKE_CONTEXT || its raw nonce || client's raw
+     nonce) with its persistent Ed25519 identity key and sends the
+     64-byte detached signature (plaintext). The client verifies this
+     against `robot_pubkey` -- pinned out of band via identity_keygen.py,
+     NOT learned from the wire -- before trusting anything further.
+     This is what lets a client tell "the real robot" apart from
+     anything else that merely has a copy of `key` (the ChaCha key),
+     which is far more exposed than the Ed25519 secret ever needs to be.
   5. Every subsequent message is an RFC-7539-style AEAD frame:
        [ uint16 LE ciphertext_length ][ ciphertext ][ 16-byte Poly1305 tag ]
      Nonce = session_prefix[0..7] + msg_counter[8..11]
@@ -24,14 +28,18 @@ Protocol recap (half-duplex, client always sends first):
 import os, socket, struct
 from typing import Optional
 
-from cryptography.exceptions import InvalidTag
+from cryptography.exceptions import InvalidTag, InvalidSignature
 from cryptography.hazmat.primitives.ciphers.aead import ChaCha20Poly1305
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
 
 NONCE_SIZE     = 12
+HANDSHAKE_SIG_SIZE = 64
+# Must match HANDSHAKE_CONTEXT in ConsoleConfig.h byte-for-byte.
+HANDSHAKE_CONTEXT  = b"AIBO-TinyConsole-Handshake"
 FRAME_TAG_SIZE = 16
 
 
-# ------------------------------------------------------------------ helpers --
+# ------------------------------------------------------------------
 
 def _recv_exact(sock: socket.socket, n: int) -> bytes:
     """Blocking read of exactly n bytes."""
@@ -84,52 +92,7 @@ def _aead_decrypt(aead: ChaCha20Poly1305, nonce: bytes, sock: socket.socket) -> 
     except InvalidTag:
         raise ValueError("Authentication tag mismatch")
 
-def _hchacha20(key: bytes, nonce16: bytes) -> bytes:
-    """
-    HChaCha20 subkey derivation — direct Python translation of hchacha20()
-    in chacha_merged.c.
-
-    Runs 20 ChaCha20 rounds on (key, nonce16) and returns words [0..3] and
-    [12..15] of the raw output state (WITHOUT adding back the initial state).
-    That omission is exactly what distinguishes HChaCha20 from ChaCha20 and
-    what makes it safe to use as a key-derivation function.
-
-    key:     32 bytes  — master CHACHA_KEY
-    nonce16: 16 bytes  — session_prefix (8 bytes) padded with 8 zero bytes
-    returns: 32 bytes  — per-session AEAD key
-    """
-    SIGMA = b"expand 32-byte k"
-
-    def rotl32(v: int, n: int) -> int:
-        return ((v << n) | (v >> (32 - n))) & 0xFFFFFFFF
-
-    def qr(s: list, a: int, b: int, c: int, d: int) -> None:
-        s[a] = (s[a] + s[b]) & 0xFFFFFFFF; s[d] = rotl32(s[d] ^ s[a], 16)
-        s[c] = (s[c] + s[d]) & 0xFFFFFFFF; s[b] = rotl32(s[b] ^ s[c], 12)
-        s[a] = (s[a] + s[b]) & 0xFFFFFFFF; s[d] = rotl32(s[d] ^ s[a],  8)
-        s[c] = (s[c] + s[d]) & 0xFFFFFFFF; s[b] = rotl32(s[b] ^ s[c],  7)
-
-    # Initial ChaCha20 state: constants[0..3] | key[4..11] | nonce16[12..15]
-    state = list(struct.unpack_from("<16I", SIGMA + key + nonce16))
-
-    for _ in range(10):           # 10 double-rounds = 20 rounds total
-        qr(state,  0,  4,  8, 12) # column rounds
-        qr(state,  1,  5,  9, 13)
-        qr(state,  2,  6, 10, 14)
-        qr(state,  3,  7, 11, 15)
-        qr(state,  0,  5, 10, 15) # diagonal rounds
-        qr(state,  1,  6, 11, 12)
-        qr(state,  2,  7,  8, 13)
-        qr(state,  3,  4,  9, 14)
-
-    # Output words [0..3] + [12..15] — initial state NOT added back.
-    return struct.pack("<8I",
-        state[0],  state[1],  state[2],  state[3],
-        state[12], state[13], state[14], state[15],
-    )
-
-
-# ---------------------------------------------------------------- AiboLink --
+# ------------------------------------------------------------------
 
 class AiboLink:
     """
@@ -137,7 +100,7 @@ class AiboLink:
 
     Typical usage::
 
-        link = AiboLink("192.168.1.124", 7777, key_bytes)
+        link = AiboLink("192.168.1.124", 7777, key_bytes, robot_pubkey_bytes)
         banner = link.connect()
         response = link.send_command("GET_UP")
         link.disconnect()          # sends QUIT, then closes
@@ -145,24 +108,32 @@ class AiboLink:
         link.close()               # force-closes without QUIT
     """
 
-    def __init__(self, robot_ip: str, port: int, key: bytes) -> None:
+    def __init__(self, robot_ip: str, port: int, key: bytes, robot_pubkey: bytes) -> None:
         if len(key) != 32:
             raise ValueError(f"ChaCha20 key must be 32 bytes, got {len(key)}")
-        self._robot_ip = robot_ip
-        self._port     = port
-        self._key      = key
+        if len(robot_pubkey) != 32:
+            raise ValueError(f"robot_pubkey must be 32 bytes, got {len(robot_pubkey)}")
+        self.robot_ip = robot_ip
+        self.port     = port
+        self.key      = key
 
-        self._sock:           Optional[socket.socket]  = None
-        self._aead:           Optional[ChaCha20Poly1305] = None
-        self._session_prefix: Optional[bytes]          = None
-        self._tx_counter = 0
-        self._rx_counter = 0
+        # Pinned out of band (identity_keygen.py's printed hex), NOT learned
+        # from the wire -- deliberately stricter than literal trust-on-first-
+        # use, which would accept whatever key shows up on the very first
+        # connection with no external check at all.
+        self.robot_pubkey_obj = Ed25519PublicKey.from_public_bytes(robot_pubkey)
+
+        self.sock:           Optional[socket.socket]  = None
+        self.aead:           Optional[ChaCha20Poly1305] = None
+        self.session_prefix: Optional[bytes]          = None
+        self.tx_counter = 0
+        self.rx_counter = 0
 
     # ----------------------------------------------------------------
 
     @property
     def is_connected(self) -> bool:
-        return self._sock is not None
+        return self.sock is not None
 
     # ----------------------------------------------------------------
 
@@ -173,12 +144,12 @@ class AiboLink:
         Returns the banner string (e.g. "CONSOLE_READY").
         Raises ConnectionError / OSError on network failure.
         """
-        if self._sock:
+        if self.sock:
             raise RuntimeError("Already connected; call close() first")
 
         s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         s.settimeout(5.0) # 5s to connect
-        s.connect((self._robot_ip, self._port))
+        s.connect((self.robot_ip, self.port))
         s.settimeout(10.0)  # per-command timeout once connected ; adjust depending on needs
 
         # Read banner line (terminated by \n)
@@ -193,23 +164,34 @@ class AiboLink:
         client_nonce = os.urandom(NONCE_SIZE)
         s.sendall(client_nonce)
 
+        # --- Verify the robot's identity before trusting anything else ---
+        # The signature covers exactly (context || raw_nonce || client_nonce),
+        # matching SignHandshake() in TinyConsole.cc byte-for-byte.
+        sig = _recv_exact(s, HANDSHAKE_SIG_SIZE)
+        transcript = HANDSHAKE_CONTEXT + raw_nonce + client_nonce
+        try:
+            self.robot_pubkey_obj.verify(sig, transcript)
+        except InvalidSignature:
+            s.close()
+            raise ConnectionError(
+                "Robot identity verification FAILED for "
+                f"{self.robot_ip}:{self.port}. The device that answered "
+                "did not sign the handshake with the expected key. This "
+                "could mean an impersonator/MITM on the network, or that "
+                "robot_pubkey is stale after the robot was re-flashed with "
+                "a new identity. Refusing to proceed."
+            )
+
         # XOR bytes [0..7] to build the session prefix.
         # Bytes [8..11] are the per-message counter, managed by _build_nonce.
-        self._session_prefix = bytes(
+        self.session_prefix = bytes(
             a ^ b for a, b in zip(raw_nonce[:8], client_nonce[:8])
         )
 
-        # Derive a per-session AEAD key so that the master key is never used
-        # directly for encryption.  Input nonce is the 8-byte session prefix
-        # zero-padded to the 16 bytes that HChaCha20 expects.
-        # This mirrors TinyConsole.cc ReceiveCont phase 2.
-        hchacha_input = self._session_prefix + b"\x00" * 8
-        session_key   = _hchacha20(self._key, hchacha_input)
-
-        self._sock       = s
-        self._aead       = ChaCha20Poly1305(session_key)
-        self._tx_counter = 0
-        self._rx_counter = 0
+        self.sock       = s
+        self.aead       = ChaCha20Poly1305(self.key)
+        self.tx_counter = 0
+        self.rx_counter = 0
 
         return banner.decode("ascii", errors="replace").strip()
 
@@ -233,17 +215,17 @@ class AiboLink:
         plaintext = (cmd.rstrip("\r\n") + "\n").encode("utf-8")
 
         # --- Encrypt and send ---
-        tx_nonce = _build_nonce(self._session_prefix, self._tx_counter,
+        tx_nonce = _build_nonce(self.session_prefix, self.tx_counter,
                                  is_server_tx=False)
-        self._tx_counter += 1
-        frame = _aead_encrypt(self._aead, tx_nonce, plaintext)
-        self._sock.sendall(frame)
+        self.tx_counter += 1
+        frame = _aead_encrypt(self.aead, tx_nonce, plaintext)
+        self.sock.sendall(frame)
 
         # --- Receive and decrypt ---
-        rx_nonce = _build_nonce(self._session_prefix, self._rx_counter,
+        rx_nonce = _build_nonce(self.session_prefix, self.rx_counter,
                                  is_server_tx=True)
-        self._rx_counter += 1
-        response = _aead_decrypt(self._aead, rx_nonce, self._sock)
+        self.rx_counter += 1
+        response = _aead_decrypt(self.aead, rx_nonce, self.sock)
         return response.decode("utf-8", errors="replace").strip()
 
     # ----------------------------------------------------------------
@@ -254,24 +236,24 @@ class AiboLink:
         Safe to call even if already disconnected.
         Use this after a link error to reset state before reconnecting.
         """
-        if self._sock:
+        if self.sock:
             try:
-                self._sock.close()
+                self.sock.close()
             except OSError:
                 pass
             finally:
-                self._sock           = None
-                self._aead           = None
-                self._session_prefix = None
-                self._tx_counter     = 0
-                self._rx_counter     = 0
+                self.sock           = None
+                self.aead           = None
+                self.session_prefix = None
+                self.tx_counter     = 0
+                self.rx_counter     = 0
 
     def disconnect(self) -> None:
         """
         Graceful shutdown: send QUIT (best-effort), then close the socket.
         Silently ignores any errors during the QUIT exchange.
         """
-        if self._sock:
+        if self.sock:
             try:
                 self.send_command("QUIT")
             except Exception:

@@ -4,12 +4,15 @@
 //
 //   PC client                         AIBO (this object)
 //   ---------                         ------------------
-//   connect()            ------>      ListenCont()
-//                                       build 12-byte session nonce
-//                                       send "CONSOLE_READY\n" + nonce (plaintext)
+//   connect()            ------>      ListenCont() which build a 12-byte session nonce and send "CONSOLE_READY\n" + nonce (plaintext)
 //   recv banner line + nonce
 //   init ChaCha20+Poly1305 ctx
 //   -- AEAD session starts here on both sides --
+//
+//   recv 64-byte signature, verify
+//   against pinned robot_pubkey          -- see SignHandshake();
+//   before trusting anything below          proves the peer holds
+//                                            ROBOT_ED25519_SK
 //
 //   send AEAD frame      ------>      ReceiveCont() [phase 0]
 //                                       recv 2-byte length header
@@ -24,12 +27,12 @@
 //   REST       lie down to sleeping position
 //   FORWARD    diagonal trot forward (loops until interrupted)
 //   BACK       diagonal trot backward (loops until interrupted)
-//   STOP       stop walking, return to broadbase
+//   STOP       stop action, return to broadbase
 //   QUIT       close connection (existing)
 //
 
-#ifndef _TinyConsole_h_DEFINED
-#define _TinyConsole_h_DEFINED
+#ifndef TinyConsole_h_DEFINED
+#define TinyConsole_h_DEFINED
 
 #include <OPENR/OObject.h>
 #include <OPENR/OSubject.h>
@@ -40,11 +43,12 @@
 #include <EndpointTypes.h>
 #include <TCPEndpointMsg.h>
 #include <stdint.h>
-#include <OPENR/core_macro.h>
+#include <OPENR/core_macro.h> // needed for using macros
 
 #include "TCPConnection.h"
-#include "ConsoleConfig.h"  // NONCE_SIZE, CHACHA_KEY, etc.
+#include "ConsoleConfig.h"  // NONCE_SIZE, CHACHA_KEY, ROBOT_ED25519_*, etc.
 #include "rfc7539.h"        // chacha20poly1305_ctx, rfc7539_init/finish
+#include "tweetnacl.h"      // crypto_sign / crypto_sign_open (Ed25519)
 #include "def.h"
 #include "entry.h"
 
@@ -55,6 +59,18 @@
 enum MovingResult {
 	MOVING_CONT,
 	MOVING_FINISH
+};
+
+// Tracks progress through the handshake so SendCont()
+// Knows what to do once each send completes:
+//   HS_BANNER_SENT -> just sent banner+nonce, wait for client's nonce
+//   HS_SIG_SENT    -> just sent our Ed25519 signature, wait for first
+//                     AEAD frame (the client verifies before sending one)
+//   HS_ESTABLISHED -> handshake done, normal AEAD traffic from here on
+enum HandshakeStage {
+    HS_BANNER_SENT,
+    HS_SIG_SENT,
+    HS_ESTABLISHED
 };
 
 // High-level command issued from the TCP console.
@@ -144,6 +160,13 @@ private:
     bool AeadDecrypt   (const byte* frame, int frameLen,
                         byte* plaintext, int* ptLen);
 
+    // Signs (HANDSHAKE_CONTEXT || serverNonceSent_ || clientNonce) with
+    // ROBOT_ED25519_SK and writes the 64-byte detached signature to
+    // sigOut. Returns false only if the underlying crypto_sign() call
+    // itself fails (it shouldn't, given a well-formed key).
+    bool SignHandshake (const uint8_t* clientNonce,
+                        uint8_t sigOut[HANDSHAKE_SIG_SIZE]);
+
     // ================================================================
     //  Motion constants
     // ===============================================================
@@ -209,37 +232,41 @@ private:
     // ================================================================
 
     // --- TCP ---
-    antStackRef   ipstackRef_;
-    TCPConnection conn_;
+    antStackRef   ipstackRef;
+    TCPConnection conn;
 
     // Per-session AEAD state
-    uint8_t  sessionNonce_[NONCE_SIZE];
-    uint32_t txCounter_;
-    uint32_t rxCounter_;
-    bool     pendingClose_;
-    bool     handshakeDone_;
-	uint8_t  sessionKey_[32];
-		
-    // Two-phase receive state
-    int      recvPhase_;
-    uint16_t pendingFrameLen_;
+    uint8_t  sessionNonce[NONCE_SIZE];
+    uint32_t txCounter;
+    uint32_t rxCounter;
+    bool     pendingClose;
+    HandshakeStage handshakeStage;
 
-    static uint32_t sessionId_;
+    // Exact bytes sent as our nonce contribution in ListenCont(), kept
+    // around because sessionNonce_[0..7] gets overwritten in place by
+    // the client-nonce XOR before the handshake signature is computed.
+    uint8_t  serverNonceSent[NONCE_SIZE];
+
+    // Two-phase receive state
+    int      recvPhase;
+    uint16_t pendingFrameLen;
+
+    static uint32_t sessionId;
 
     // --- Motion ---
-    OPrimitiveID  jointID_[NUM_JOINTS];
-    RCRegion*     cmdRegion_[NUM_CMD_VECTORS];
+    OPrimitiveID  jointID[NUM_JOINTS];
+    RCRegion*     cmdRegion[NUM_CMD_VECTORS];
 
-    MotionState   motionState_;
-    MotionCmd     pendingCmd_;
-    int           motionCounter_;
+    MotionState   motionState;
+    MotionCmd     pendingCmd;
+    int           motionCounter;
 
     // Interpolation trajectory: target[i] = start[i] + delta[i] * step
-    double        motionStart_[NUM_JOINTS];
-    double        motionDelta_[NUM_JOINTS];
+    double        motionStart[NUM_JOINTS];
+    double        motionDelta[NUM_JOINTS];
 
     // Which direction the current walk is going.
     bool          walkForward_;
 };
 
-#endif // _TinyConsole_h_DEFINED
+#endif // TinyConsole_h_DEFINED
