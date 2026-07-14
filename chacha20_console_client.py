@@ -1,16 +1,22 @@
 #!/usr/bin/env python3
 #
-# chacha_console_client.py
-# Console client for TinyConsole (ChaCha20+Poly1305 AEAD version).
+# chacha20_console_client.py
+# Self-contained console client for TinyConsole (ChaCha20+Poly1305 AEAD,
+# Ed25519-authenticated handshake).
 #
-# Protocol recap (must match TinyConsole.cc exactly):
+# Recap (must match TinyConsole.cc!):
 #
 #   1. TCP connect
-#   2. Server sends "CONSOLE_READY\n" (14 bytes, plaintext)
-#   3. Server sends 12-byte session nonce  (plaintext)
+#   2. Robot sends "CONSOLE_READY\n" (14 bytes, plaintext)
+#   3. Robot sends 12-byte session nonce  (plaintext)
 #      nonce[0..3]  = session ID (LE)
 #      nonce[4..7]  = client IPv4 (LE)
 #      nonce[8..11] = 0x00000000  (placeholder, ignored by client)
+#   4. Client sends its own 12-byte random nonce contribution (plaintext)
+#   5. Robot sends a 64-byte Ed25519 signature (plaintext) over
+#      (HANDSHAKE_CONTEXT || its raw nonce || client's raw nonce),
+#      signed with its persistent identity key. The client verifies this
+#      against ROBOT_PUBKEY_HEX before trusting anything further. 
 #
 #   From here every message is an AEAD frame:
 #      [ uint16_t ciphertext_length  (2 bytes, LE) ]
@@ -18,38 +24,55 @@
 #      [ Poly1305 tag                (16 bytes)    ]
 #
 #   Nonce construction per message:
-#      nonce[0..7]  = session_prefix received from server
+#      nonce[0..7]  = session_prefix (XOR of robot + client raw nonces)
 #      nonce[8..11] = msg_counter (LE), shared across TX and RX,
 #                     incremented after every message sent or received.
 #
 #   Counter sequence (half-duplex: client always sends first):
-#      0 → client TX (server decrypts with msgCounter_=0)
-#      1 → server TX (client decrypts with msgCounter_=1)
-#      2 → client TX (server decrypts with msgCounter_=2)
+#      0 → client TX (Robot decrypts with msgCounter_=0)
+#      1 → Robot TX (client decrypts with msgCounter_=1)
+#      2 → client TX (Robot decrypts with msgCounter_=2)
 #      ...
+#
+# Usage:
+#   python3 chacha20_console_client.py
+#   python3 chacha20_console_client.py --ip 192.168.1.42 --port 7777
 #
 # Dependency:
 #   pip install cryptography
-#
 
-import socket, struct, os, sys
+import argparse, socket, struct, os, sys
+from typing import Tuple
+
 from cryptography.hazmat.primitives.ciphers.aead import ChaCha20Poly1305
-from cryptography.exceptions import InvalidTag
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
+from cryptography.exceptions import InvalidTag, InvalidSignature
 
 # ---------------------------------------------------------------
 #  Configuration  — must match ConsoleConfig.h exactly
+#
+#  Robot IP/port are parameters
 # ---------------------------------------------------------------
-ROBOT_IP  = "192.168.1.124"
-PORT      = 7777
-NONCE_SIZE     = 12
-FRAME_TAG_SIZE = 16
+DEFAULT_ROBOT_IP = "192.168.1.124"
+DEFAULT_PORT     = 7777
+
+NONCE_SIZE         = 12
+FRAME_TAG_SIZE     = 16
+HANDSHAKE_SIG_SIZE = 64
+# Must match HANDSHAKE_CONTEXT in ConsoleConfig.h byte-for-byte.
+HANDSHAKE_CONTEXT  = b"AIBO-TinyConsole-Handshake"
 
 CHACHA_KEY = bytes([
-    0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 
-    0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 
-    0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 
-    0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0
+    0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0,
+    0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0,
+    0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0,
+    0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0,
 ])
+
+# PLACEHOLDER, need to be filled with the public key of the robot.
+# Left empty, this raises an error.
+ROBOT_PUBKEY_HEX = ""
+
 # ---------------------------------------------------------------
 #  Helpers
 # ---------------------------------------------------------------
@@ -60,22 +83,21 @@ def recv_exact(sock: socket.socket, n: int) -> bytes:
     while len(buf) < n:
         chunk = sock.recv(n - len(buf))
         if not chunk:
-            raise ConnectionError("Connection closed by server")
+            raise ConnectionError("Connection closed by robot")
         buf += chunk
     return buf
 
 
-def build_nonce(session_prefix: bytes, counter: int, is_server_tx: bool) -> bytes:
+def build_nonce(session_prefix: bytes, counter: int, is_robot_tx: bool) -> bytes:
     """
     Reconstruct the 12-byte nonce for one message.
-      session_prefix : bytes [0..7] received from server
-      counter        : uint32 shared message counter (LE in bytes [8..11])
-      is_server_tx   : bool indicating if this is a server-to-client message
+      session_prefix : bytes [0..7] from the (verified) handshake
+      counter : uint32 shared message counter (LE in bytes [8..11])
+      is_robot_tx : bool indicating if this is a robot-to-client message
     """
     mc = counter
-
-    if is_server_tx:
-        mc |= 0x80000000   # Set high bit for server-to-client messages
+    if is_robot_tx:
+        mc |= 0x80000000   # Set high bit for robot-to-client messages
     return session_prefix + struct.pack("<I", mc)
 
 
@@ -99,7 +121,7 @@ def aead_decrypt(aead: ChaCha20Poly1305,
                  sock: socket.socket) -> bytes:
     """
     Read one AEAD frame from sock, verify its tag, and return the plaintext.
-    Raises ValueError on authentication failure, ConnectionError on EOF.
+    Raises ValueError on authentication failure.
     """
     header = recv_exact(sock, 2)
     ct_len = struct.unpack("<H", header)[0]
@@ -113,80 +135,108 @@ def aead_decrypt(aead: ChaCha20Poly1305,
     except InvalidTag:
         raise ValueError("Authentication tag mismatch")
 
-def hchacha20(key: bytes, nonce16: bytes) -> bytes:
+
+# -----------
+#  Handshake 
+# -----------
+
+def do_handshake(s: socket.socket,
+                 robot_pubkey_obj: Ed25519PublicKey) -> Tuple[str, bytes, bytes]:
     """
-    HChaCha20 subkey derivation — direct translation of hchacha20() in chacha_merged.c.
-    Runs 20 ChaCha rounds on (key, nonce16) and returns words [0..3, 12..15]
-    of the raw output (no initial-state addition), giving a 32-byte subkey.
+    Read the banner, exchange nonces, verify the robot's handshake
+    signature, and derive the per-session AEAD key.
 
-    key:     32 bytes  (CHACHA_KEY master key)
-    nonce16: 16 bytes  (session_prefix padded with 8 zero bytes)
-    returns: 32 bytes  (per-session AEAD key)
+    Returns (banner_text, session_prefix, session_key).
+    Raises ConnectionError if identity verification fails, or if the
+    connection drops mid-handshake.
     """
-    SIGMA = b"expand 32-byte k"
+    banner = b""
+    while b"\n" not in banner:
+        banner += recv_exact(s, 1)
 
-    def rotl32(v: int, n: int) -> int:
-        return ((v << n) | (v >> (32 - n))) & 0xFFFFFFFF
+    raw_nonce = recv_exact(s, NONCE_SIZE)
 
-    def qr(s: list, a: int, b: int, c: int, d: int) -> None:
-        s[a] = (s[a] + s[b]) & 0xFFFFFFFF;  s[d] = rotl32(s[d] ^ s[a], 16)
-        s[c] = (s[c] + s[d]) & 0xFFFFFFFF;  s[b] = rotl32(s[b] ^ s[c], 12)
-        s[a] = (s[a] + s[b]) & 0xFFFFFFFF;  s[d] = rotl32(s[d] ^ s[a],  8)
-        s[c] = (s[c] + s[d]) & 0xFFFFFFFF;  s[b] = rotl32(s[b] ^ s[c],  7)
+    # Send a random contribution to the session nonce, the robot XORs
+    # it into its own. Bytes [8..11] are counter-controlled on both sides -> only [0..7] matter
+    client_nonce = os.urandom(NONCE_SIZE)
+    s.sendall(client_nonce)
 
-    # Initial ChaCha20 state: constants (0-3) | key (4-11) | nonce16 (12-15)
-    state = list(struct.unpack_from('<16I', SIGMA + key + nonce16))
+    # --- Verify the robot's identity before trusting anything else ---
+    # Transcript must match SignHandshake() in TinyConsole.cc byte-for-byte:
+    # HANDSHAKE_CONTEXT || raw_nonce (as the robot sent it) || client_nonce.
+    sig = recv_exact(s, HANDSHAKE_SIG_SIZE)
+    transcript = HANDSHAKE_CONTEXT + raw_nonce + client_nonce
+    try:
+        robot_pubkey_obj.verify(sig, transcript)
+    except InvalidSignature:
+        raise ConnectionError(
+            "Robot identity verification FAILED. The device that answered "
+            "did not sign the handshake with the expected key. This could "
+            "mean an impersonator/MITM on the network, or that "
+            "ROBOT_PUBKEY_HEX is stale after the robot was re-flashed with "
+            "a new identity. Refusing to proceed."
+        )
 
-    for _ in range(10):          # 10 double-rounds = 20 rounds total
-        qr(state, 0, 4,  8, 12) # column rounds
-        qr(state, 1, 5,  9, 13)
-        qr(state, 2, 6, 10, 14)
-        qr(state, 3, 7, 11, 15)
-        qr(state, 0, 5, 10, 15) # diagonal rounds
-        qr(state, 1, 6, 11, 12)
-        qr(state, 2, 7,  8, 13)
-        qr(state, 3, 4,  9, 14)
+    session_prefix = bytes(a ^ b for a, b in zip(raw_nonce[:8], client_nonce[:8]))
 
-    # Output: first 4 words + last 4 words (words 12-15) — NOT added back to
-    # the initial state. This is what distinguishes HChaCha20 from ChaCha20.
-    return struct.pack('<8I',
-        state[0],  state[1],  state[2],  state[3],
-        state[12], state[13], state[14], state[15])
+    return banner.decode("ascii", errors="replace").strip(), session_prefix, CHACHA_KEY
+
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        description="Encrypted, identity-verified console client for the AIBO TinyConsole."
+    )
+    parser.add_argument(
+        "--ip", "-i", default=DEFAULT_ROBOT_IP,
+        help=f"AIBO IP address (default: {DEFAULT_ROBOT_IP})",
+    )
+    parser.add_argument(
+        "--port", "-p", type=int, default=DEFAULT_PORT,
+        help=f"TinyConsole TCP port (default: {DEFAULT_PORT})",
+    )
+    return parser.parse_args()
 
 
 def main():
-    # -- Connect --
+    args = parse_args()
+
+    if not ROBOT_PUBKEY_HEX:
+        print(
+            "ROBOT_PUBKEY_HEX is not set. Run robot_keys_generator.py once "
+            "and paste its printed robot_ed25519_pubkey_hex into this file."
+        )
+        sys.exit(1)
+    try:
+        robot_pubkey_obj = Ed25519PublicKey.from_public_bytes(bytes.fromhex(ROBOT_PUBKEY_HEX))
+    except ValueError as e:
+        print(f"ROBOT_PUBKEY_HEX is not valid: {e}")
+        sys.exit(1)
+
+    # Connect
     try:
         s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        s.connect((ROBOT_IP, PORT))
-        print(f"Connected to robot at {ROBOT_IP}:{PORT}")
+        s.connect((args.ip, args.port))
+        print(f"Connected to robot at {args.ip}:{args.port}")
     except Exception as e:
         print(f"Connection error: {e}")
         sys.exit(1)
 
-    # -- Handshake: read banner line then 12-byte nonce --
-    banner = b""
-    while b"\n" not in banner:
-        banner += recv_exact(s, 1)
-    print(f"Banner: {banner.decode('ascii', errors='replace').strip()}")
+    # Handshake: banner, nonce exchange, signature verification
+    try:
+        banner, session_prefix, session_key = do_handshake(s, robot_pubkey_obj)
+    except (ConnectionError, OSError) as e:
+        print(f"Handshake failed: {e}")
+        s.close()
+        sys.exit(1)
 
-    raw_nonce      = recv_exact(s, NONCE_SIZE)
-    # We send random contribution to session nonce -> AIBO then XOR into sessionNonce before first AEAD frame
-    # Bytes [8..11] are counter-controlled on both sides
-    client_nonce = os.urandom(NONCE_SIZE)
-    s.sendall(client_nonce)
-    session_prefix = bytes(a ^ b for a, b in zip(raw_nonce[:8], client_nonce[:8]))
-
-    # Derive a per-session AEAD key: HChaCha20(master_key, session_prefix || 0x00*8)
-    # Mirrors the derivation in TinyConsole.cc ReceiveCont phase 2.
-    hchacha_input = session_prefix + b'\x00' * 8   # 8-byte prefix padded to 16 bytes
-    session_key   = hchacha20(CHACHA_KEY, hchacha_input)
+    print(f"Banner: {banner}")
+    print("Robot identity verified against ROBOT_PUBKEY_HEX.")
 
     tx_counter = 0
     rx_counter = 0
-    aead        = ChaCha20Poly1305(session_key)
+    aead = ChaCha20Poly1305(session_key)
 
-    # -- Command loop --
+    # Command loop
     try:
         while True:
             try:
@@ -199,21 +249,21 @@ def main():
             plaintext = (cmd + "\n").encode("utf-8")
 
             # 1. Encrypt and send
-            tx_nonce    = build_nonce(session_prefix, tx_counter, is_server_tx=False)
+            tx_nonce    = build_nonce(session_prefix, tx_counter, is_robot_tx=False)
             tx_counter += 1
             frame       = aead_encrypt(aead, tx_nonce, plaintext)
             s.sendall(frame)
 
             # 2. Receive and decrypt
             try:
-                rx_nonce    = build_nonce(session_prefix, rx_counter, is_server_tx=True)
+                rx_nonce    = build_nonce(session_prefix, rx_counter, is_robot_tx=True)
                 rx_counter += 1
                 response    = aead_decrypt(aead, rx_nonce, s)
                 print("ROBOT:", response.decode("utf-8", errors="replace").strip())
             except (ValueError, InvalidTag):
                 print("ERROR: authentication tag mismatch — dropping response")
             except ConnectionError:
-                print("Server closed the connection.")
+                print("Robot closed the connection.")
                 break
 
             if cmd.strip().upper() == "QUIT":
@@ -224,6 +274,4 @@ def main():
     finally:
         s.close()
 
-
-if __name__ == "__main__":
-    main()
+main()
