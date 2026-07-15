@@ -676,22 +676,21 @@ TinyConsole::SendCont(ANTENVMSG msg)
 
         case HS_BANNER_SENT:
             // Just sent banner+nonce; wait for the client's nonce.
-            recvPhase= 1;
+            recvPhase= 0;
             Receive(NONCE_SIZE, NONCE_SIZE);
             break;
 
         case HS_SIG_SENT:
             // Just sent our handshake signature. The client verifies it
-            // before sending anything further, so from here on this is
-            // ordinary AEAD traffic.
+            // before sending anything further.
             handshakeStage= HS_ESTABLISHED;
-            recvPhase= 2;
+            recvPhase= 1;
             Receive(FRAME_HEADER_SIZE, FRAME_HEADER_SIZE);
             break;
 
         case HS_ESTABLISHED:
             // Just sent an ordinary encrypted response.
-            recvPhase= 2;
+            recvPhase= 1;
             Receive(FRAME_HEADER_SIZE, FRAME_HEADER_SIZE);
             break;
     }
@@ -719,6 +718,35 @@ TinyConsole::ReceiveCont(ANTENVMSG msg)
     int n = recvMsg->sizeMin;
 
     // ------------------------------------------------------------------
+    //  Phase 0 -> client nonce (12 bytes, plaintext, handshake only)
+    // ------------------------------------------------------------------
+    if (recvPhase== 0) {
+        if (n < NONCE_SIZE) {
+            OSYSLOG1((osyslogERROR, "TinyConsole: short client nonce (%d bytes)", n));
+            Close();
+            return;
+        }
+
+        uint8_t clientNonce[NONCE_SIZE];
+        memcpy(clientNonce, conn.recvData, NONCE_SIZE);
+        
+        for (int i = 0; i < 8; i++)
+        	sessionNonce[i] ^= clientNonce[i];
+        	
+        uint8_t sig[HANDSHAKE_SIG_SIZE];
+        if (!SignHandshake(clientNonce, sig)) {
+            OSYSLOG1((osyslogERROR,"TinyConsole: handshake signing failed"));
+            Close();
+            return;
+        }
+
+        memcpy(conn.sendData, sig, HANDSHAKE_SIG_SIZE);
+        handshakeStage = HS_SIG_SENT;
+        Send(conn.sendData, HANDSHAKE_SIG_SIZE);
+        return;
+    }
+    
+    // ------------------------------------------------------------------
     //  Phase 1 -> 2-byte frame header
     // ------------------------------------------------------------------
     if (recvPhase== 1) {
@@ -745,67 +773,32 @@ TinyConsole::ReceiveCont(ANTENVMSG msg)
     }
 
     // ------------------------------------------------------------------
-	// Phase 2 -> client nonce (12 bytes, plaintext, handshake only)
+	// Phase 2 -> AEAD body (ciphertext + 16-byte tag) & Dispatch
 	// ------------------------------------------------------------------
 	if (recvPhase== 2) {
-		if (n < NONCE_SIZE) {
-			OSYSLOG1((osyslogERROR, "TinyConsole: short client nonce (%d bytes)", n));
-			Close();
-			return;
-		}
-
-		// Keep a copy of the client's raw contribution before touching
-		// it as the handshake signature needs it, and conn.recvData
-		// will be reused for the next receive once we call Receive() again.
-		uint8_t clientNonce[NONCE_SIZE];
-		memcpy(clientNonce, conn.recvData, NONCE_SIZE);
-
-		// XOR client contribution into bytes [0..7]
-		// Bytes [8..11] are counter-controlled (AdvanceNonce overwrites them
-		// before evry encrypt/decrypt call), so only 0..7 matter here.
-		for (int i = 0; i < 8; i++)
-			sessionNonce[i] ^= clientNonce[i];
-
-		// Prove we hold ROBOT_ED25519_SK before the client trusts this session.
-		uint8_t sig[HANDSHAKE_SIG_SIZE];
-		if (!SignHandshake(clientNonce, sig)) {
-			OSYSLOG1((osyslogERROR, "TinyConsole: handshake signing failed"));
-			Close();
-			return;
-		}
-
-		memcpy(conn.sendData, sig, HANDSHAKE_SIG_SIZE);
-		handshakeStage= HS_SIG_SENT;
-		Send(conn.sendData, HANDSHAKE_SIG_SIZE);
-		return;
-	}
-
-    // ------------------------------------------------------------------
-    //  AEAD body (ciphertext + 16-byte tag)
-    // ------------------------------------------------------------------
-    int bodyLen = (int)pendingFrameLen+ FRAME_TAG_SIZE;
-    if (n < bodyLen) {
-        OSYSLOG1((osyslogERROR,
+		int bodyLen = (int)pendingFrameLen+ FRAME_TAG_SIZE;
+    	if (n < bodyLen) {
+        	OSYSLOG1((osyslogERROR,
                   "TinyConsole: short frame body (got %d, expected %d)",
                   n, bodyLen));
         Close();
         return;
-    }
+    	}
 
-    int ptLen = 0;
-    if (!AeadDecrypt(conn.recvData, bodyLen, conn.recvData, &ptLen)) {
-        Close();
-        return;
-    }
+    	int ptLen = 0;
+    	if (!AeadDecrypt(conn.recvData, bodyLen, conn.recvData, &ptLen)) {
+	    	Close();
+        	return;
+    	}
 
-    if (ptLen < CONSOLE_BUFSIZE) conn.recvData[ptLen] = '\0';
+    	if (ptLen < CONSOLE_BUFSIZE) conn.recvData[ptLen] = '\0';
 
-    // Strip trailing CR/LF in-place.
-    char* cmd    = (char*)conn.recvData;
-    int   cmdLen = ptLen;
-    while (cmdLen > 0 &&
+    	// Strip trailing CR/LF in-place.
+    	char* cmd    = (char*)conn.recvData;
+    	int   cmdLen = ptLen;
+    	while (cmdLen > 0 &&
            (cmd[cmdLen-1] == '\r' || cmd[cmdLen-1] == '\n'))
-        cmd[--cmdLen] = '\0';
+        	cmd[--cmdLen] = '\0';
 
     // ------------------------------------------------------------------
     //  Command dispatch
@@ -814,59 +807,60 @@ TinyConsole::ReceiveCont(ANTENVMSG msg)
     //  set pendingCmd.  The motion state machine picks it up at the
     //  next Ready() call (triggered by TriggerReady() if currently idle).
     // ------------------------------------------------------------------
-    const char* response = "OK\n";
+    	const char* response = "OK\n";
 
-    if (cmdLen == 0) {
-        response = "> ";
+    	if (cmdLen == 0) {
+        	response = "> ";
 
-    } else if (!strncmp(cmd, "PING", 4)) {
-        response = "PONG\n";
+    	} else if (!strncmp(cmd, "PING", 4)) {
+        	response = "PONG\n";
 
-    } else if (!strncmp(cmd, "GET_UP", 6)) {
-        pendingCmd= MCMD_GETUP;
-        TriggerReady();
-        response = "STANDING_UP\n";
+    	} else if (!strncmp(cmd, "GET_UP", 6)) {
+        	pendingCmd= MCMD_GETUP;
+        	TriggerReady();
+        	response = "STANDING_UP\n";
 
-    } else if (!strncmp(cmd, "REST", 4)) {
-        pendingCmd= MCMD_REST;
-        TriggerReady();
-        response = "RESTING\n";
+    	} else if (!strncmp(cmd, "REST", 4)) {
+        	pendingCmd= MCMD_REST;
+        	TriggerReady();
+        	response = "RESTING\n";
 
-    } else if (!strncmp(cmd, "FORWARD", 7)) {
-        pendingCmd= MCMD_FORWARD;
-        TriggerReady();
-        response = "MOVING_FORWARD\n";
+    	} else if (!strncmp(cmd, "FORWARD", 7)) {
+        	pendingCmd= MCMD_FORWARD;
+        	TriggerReady();
+        	response = "MOVING_FORWARD\n";
 
-    } else if (!strncmp(cmd, "BACK", 4)) {
-        pendingCmd= MCMD_BACK;
-        TriggerReady();
-        response = "MOVING_BACK\n";
+    	} else if (!strncmp(cmd, "BACK", 4)) {
+        	pendingCmd= MCMD_BACK;
+        	TriggerReady();
+        	response = "MOVING_BACK\n";
 
-    } else if (!strncmp(cmd, "STOP", 4)) {
-        pendingCmd= MCMD_STOP;
-        TriggerReady();
-        response = "STOPPING\n";
+    	} else if (!strncmp(cmd, "STOP", 4)) {
+        	pendingCmd= MCMD_STOP;
+	        TriggerReady();
+        	response = "STOPPING\n";
 
-    } else if (!strncmp(cmd, "HELP", 4)) {
-        response = "Available commands: PING, GET_UP, REST, FORWARD, BACK, STOP, HELP, QUIT\n";
+    	} else if (!strncmp(cmd, "HELP", 4)) {
+        	response = "Available commands: PING, GET_UP, REST, FORWARD, BACK, STOP, HELP, INFO, QUIT\n";
 
-    } else if (!strncmp(cmd, "INFO", 4)) {        
-        response = "I am an AIBO robot from Sony, model ERS-7M3/T.\n I was born in Japan for the European market.\n";
+    	} else if (!strncmp(cmd, "INFO", 4)) {        
+        	response = "\n I am an AIBO robot from Sony, model ERS-7M3/T.\n I was born in Japan for the European market.\n";
 
-    } else if (!strncmp(cmd, "QUIT", 4)) {
-        response      = "BYE\n";
-        pendingClose= true;
-    }
+    	} else if (!strncmp(cmd, "QUIT", 4)) {
+        	response      = "BYE\n";
+        	pendingClose= true;
+    	}
 
-    int frameLen = 0;
-    if (!AeadEncrypt((const byte*)response, (int)strlen(response),
+    	int frameLen = 0;
+    	if (!AeadEncrypt((const byte*)response, (int)strlen(response),
                      conn.sendData, &frameLen)) {
-        OSYSLOG1((osyslogERROR, "TinyConsole: AeadEncrypt failed"));
-        Close();
-        return;
+        	OSYSLOG1((osyslogERROR, "TinyConsole: AeadEncrypt failed"));
+        	Close();
+        	return;
     }
 
-    Send(conn.sendData, frameLen);
+    	Send(conn.sendData, frameLen);
+	}
 }
 
 void
