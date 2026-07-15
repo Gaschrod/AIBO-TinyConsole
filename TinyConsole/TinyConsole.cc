@@ -45,6 +45,9 @@ uint32_t TinyConsole::sessionId = 0;
 
 
 static const char* const JOINT_LOCATOR[TinyConsole::NUM_JOINTS] = {
+	"PRM:/r4/c1-Joint2:41",         // Right Front J1
+    "PRM:/r4/c1/c2-Joint2:42",      // Right Front J2
+    "PRM:/r4/c1/c2/c3-Joint2:43",   // Right Front J3
 
     "PRM:/r2/c1-Joint2:21",         // Left Front J1
     "PRM:/r2/c1/c2-Joint2:22",      // Left Front J2
@@ -53,10 +56,6 @@ static const char* const JOINT_LOCATOR[TinyConsole::NUM_JOINTS] = {
     "PRM:/r3/c1-Joint2:31",         // Left Rear J1
     "PRM:/r3/c1/c2-Joint2:32",      // Left Rear J2
     "PRM:/r3/c1/c2/c3-Joint2:33",   // Left Rear J3
-
-    "PRM:/r4/c1-Joint2:41",         // Right Front J1
-    "PRM:/r4/c1/c2-Joint2:42",      // Right Front J2
-    "PRM:/r4/c1/c2/c3-Joint2:43",   // Right Front J3
 
     "PRM:/r5/c1-Joint2:51",         // Right Rear J1
     "PRM:/r5/c1/c2-Joint2:52",      // Right Rear J2
@@ -527,7 +526,7 @@ TinyConsole::Ready(const OReadyEvent& event)
                 const double* from = walkForward? WALK_FWD_C  : WALK_BACK_C;
                 const double* to   = walkForward? WALK_FWD_D  : WALK_BACK_D;
                 SetupInterpolation(from, to, WALK_COUNTER);
-			motionState = MSTATE_WALK_D;
+				motionState = MSTATE_WALK_D;
             }
             break;
 
@@ -615,7 +614,7 @@ TinyConsole::ListenCont(ANTENVMSG msg)
     //   [0..3]  session ID (LE) monotone per boot, resets on reboot
     //   [4..7]  client IPv4   (LE)
     //   [8..11] per-message counter, written by AdvanceNonce()
-    uint32_t sid  = (uint32_t)sessionId_++;
+    uint32_t sid  = (uint32_t)sessionId++;
     uint32_t addr = listenMsg->fAddress.Address();
 
     sessionNonce[0] = (uint8_t)( sid         & 0xFF);
@@ -644,7 +643,7 @@ TinyConsole::ListenCont(ANTENVMSG msg)
     TCPEndpointSendMsg sendMsg(conn.endpoint,
                                conn.sendData, conn.sendSize);
     sendMsg.continuation = (void*)0;
-    sendMsg.Send(ipstackRef, myOID,
+    sendMsg.Send(ipstackRef, myOID_,
                  Extra_Entry[entrySendCont], sizeof(sendMsg));
     conn.state    = CONNECTION_SENDING;
     conn.sendSize = 0;
@@ -667,13 +666,13 @@ TinyConsole::SendCont(ANTENVMSG msg)
 
     conn.state = CONNECTION_CONNECTED;
 
-    if (pendingClose_) {
+    if (pendingClose) {
         pendingClose= false;
         Close();
         return;
     }
 
-    switch (handshakeStage_) {
+    switch (handshakeStage) {
 
         case HS_BANNER_SENT:
             // Just sent banner+nonce; wait for the client's nonce.
@@ -904,7 +903,7 @@ TinyConsole::Listen()
 
     TCPEndpointListenMsg listenMsg(conn.endpoint, IP_ADDR_ANY, CONSOLE_PORT);
     listenMsg.continuation = (void*)0;
-    listenMsg.Send(ipstackRef, myOID,
+    listenMsg.Send(ipstackRef, myOID_,
                    Extra_Entry[entryListenCont], sizeof(listenMsg));
 
     conn.state = CONNECTION_LISTENING;
@@ -923,7 +922,7 @@ TinyConsole::Send(const byte* /*data*/, int size)
 
     TCPEndpointSendMsg sendMsg(conn.endpoint, conn.sendData, size);
     sendMsg.continuation = (void*)0;
-    sendMsg.Send(ipstackRef, myOID,
+    sendMsg.Send(ipstackRef, myOID_,
                  Extra_Entry[entrySendCont],
                  sizeof(TCPEndpointSendMsg));
 
@@ -944,7 +943,7 @@ TinyConsole::Receive(int sizeMin, int sizeMax)
     TCPEndpointReceiveMsg recvMsg(conn.endpoint,
                                   conn.recvData, sizeMin, sizeMax);
     recvMsg.continuation = (void*)0;
-    recvMsg.Send(ipstackRef, myOID,
+    recvMsg.Send(ipstackRef, myOID_,
                  Extra_Entry[entryReceiveCont], sizeof(recvMsg));
 
     conn.state    = CONNECTION_RECEIVING;
@@ -960,7 +959,7 @@ TinyConsole::Close()
 
     TCPEndpointCloseMsg closeMsg(conn.endpoint);
     closeMsg.continuation = (void*)0;
-    closeMsg.Send(ipstackRef, myOID,
+    closeMsg.Send(ipstackRef, myOID_,
                   Extra_Entry[entryCloseCont], sizeof(closeMsg));
 
     conn.state = CONNECTION_CLOSING;
@@ -995,7 +994,7 @@ TinyConsole::AeadEncrypt(const byte* plaintext, int ptLen,
     AdvanceNonce(txCounter, true);
 
     chacha20poly1305_ctx ctx;
-    rfc7539_init(&ctx, (uint8_t*)CHACHA_KEY, sessionNonce_);
+    rfc7539_init(&ctx, (uint8_t*)CHACHA_KEY, sessionNonce);
 
     frameOut[0] = (uint8_t)( ptLen       & 0xFF);
     frameOut[1] = (uint8_t)((ptLen >> 8) & 0xFF);
@@ -1030,7 +1029,7 @@ TinyConsole::AeadDecrypt(const byte* frame, int frameLen,
     AdvanceNonce(rxCounter, false);
 
     chacha20poly1305_ctx ctx;
-    rfc7539_init(&ctx, (uint8_t*)CHACHA_KEY, sessionNonce_);
+    rfc7539_init(&ctx, (uint8_t*)CHACHA_KEY, sessionNonce);
 	
 	uint8_t frame_header_bytes[FRAME_HEADER_SIZE];
 	frame_header_bytes[0] = (uint8_t)( ctLen & 0xFF);
@@ -1239,7 +1238,7 @@ TinyConsole::AdvanceInterpolation(int maxSteps)
         return MOVING_CONT;
     }
 
-    int step = motionCounter_;
+    int step = motionCounter;
 
     for (int i = 0; i < NUM_JOINTS; i++) {
         double cur = motionStart[i] + motionDelta[i] *  step;
@@ -1250,7 +1249,7 @@ TinyConsole::AdvanceInterpolation(int maxSteps)
     subject[sbjMove]->SetData(rgn);
     subject[sbjMove]->NotifyObservers();
 
-    motionCounter_++;
+    motionCounter++;
     return (motionCounter>= maxSteps) ? MOVING_FINISH : MOVING_CONT;
 }
 
@@ -1290,14 +1289,14 @@ TinyConsole::BeginMotion(MotionCmd cmd)
 
 		case MCMD_FORWARD:
             OSYSPRINT(("TinyConsole: FORWARD walk\n"));
-            walkForward= true;
+            walkForward = true;
             SetupInterpolation(cur, WALK_FWD_A, WALK_COUNTER); // UPDATED COUNTER
             motionState = MSTATE_WALK_A;
             break;
 
         case MCMD_BACK:
             OSYSPRINT(("TinyConsole: BACK walk\n"));
-            walkForward= false;
+            walkForward = false;
             SetupInterpolation(cur, WALK_BACK_A, WALK_COUNTER); // UPDATED COUNTER
             motionState = MSTATE_WALK_A;
             break;

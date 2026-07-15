@@ -48,7 +48,9 @@
 #include "TCPConnection.h"
 #include "ConsoleConfig.h"  // NONCE_SIZE, CHACHA_KEY, ROBOT_ED25519_*, etc.
 #include "rfc7539.h"        // chacha20poly1305_ctx, rfc7539_init/finish
-#include "tweetnacl.h"      // crypto_sign / crypto_sign_open (Ed25519)
+extern "C"{
+	#include "tweetnacl.h"      // crypto_sign / crypto_sign_open (Ed25519)
+}
 #include "def.h"
 #include "entry.h"
 
@@ -171,12 +173,12 @@ private:
     //  Motion constants
     // ===============================================================
 
-    // Step counts (each step = one ocommandMAX_FRAMES block = 128 ms).
-    static const int STARTUP_COUNTER    =  24;
-    static const int GETUP_COUNTER      =  6; 
-    static const int REST_COUNTER       = 12;
-    static const int WALK_COUNTER       =  3; 
-    static const int STOP_COUNTER       =  8;
+    // Step counts (each step = one ocommandMAX_FRAMES block = 16*frames = 16*8ms = 128ms).
+    static const int STARTUP_COUNTER    =  24; // 3s
+    static const int GETUP_COUNTER      =  6;  // 0.756s
+    static const int REST_COUNTER       = 12;  // 1.512s
+    static const int WALK_COUNTER       =  3;  // 0.756s
+    static const int STOP_COUNTER       =  8;  // 1.008s
 
     // Servo gain values from ERS-7 Model Information (standard gains).
     // Joint order within a leg: J1 (hip rotation), J2 (hip pitch), J3 (knee).
@@ -260,13 +262,11 @@ private:
     MotionState   motionState;
     MotionCmd     pendingCmd;
     int           motionCounter;
+    bool 		  walkForward;
 
     // Interpolation trajectory: target[i] = start[i] + delta[i] * step
     double        motionStart[NUM_JOINTS];
     double        motionDelta[NUM_JOINTS];
-
-    // Which direction the current walk is going.
-    bool          walkForward_;
 };
 
 #endif // TinyConsole_h_DEFINED

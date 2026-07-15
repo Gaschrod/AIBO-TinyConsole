@@ -31,7 +31,7 @@ all: tinyConsole.bin
 TinyConsoleStub.cc: stub.cfg
 	$(STUBGEN) stub.cfg
 
-CRYPTO_OBJS = rfc7539.o chacha20poly1305.o poly1305-donna.o chacha_merged.o
+CRYPTO_OBJS = rfc7539.o chacha20poly1305.o poly1305-donna.o chacha_merged.o tweetnacl.o
 
 tinyConsole.bin: TinyConsoleStub.o TinyConsole.o $(CRYPTO_OBJS) tinyConsole.ocf
 	$(MKBIN) $(MKBINFLAGS) -o $@ $^ $(LIBS)
