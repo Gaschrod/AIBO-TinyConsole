@@ -4,36 +4,6 @@
 # Self-contained console client for TinyConsole (ChaCha20+Poly1305 AEAD,
 # Ed25519-authenticated handshake).
 #
-# Recap (must match TinyConsole.cc!):
-#
-#   1. TCP connect
-#   2. Robot sends "CONSOLE_READY\n" (14 bytes, plaintext)
-#   3. Robot sends 12-byte session nonce  (plaintext)
-#      nonce[0..3]  = session ID (LE)
-#      nonce[4..7]  = client IPv4 (LE)
-#      nonce[8..11] = 0x00000000  (placeholder, ignored by client)
-#   4. Client sends its own 12-byte random nonce contribution (plaintext)
-#   5. Robot sends a 64-byte Ed25519 signature (plaintext) over
-#      (HANDSHAKE_CONTEXT || its raw nonce || client's raw nonce),
-#      signed with its persistent identity key. The client verifies this
-#      against ROBOT_PUBKEY_HEX before trusting anything further. 
-#
-#   From here every message is an AEAD frame:
-#      [ uint16_t ciphertext_length  (2 bytes, LE) ]
-#      [ ciphertext                  (ctLen bytes) ]
-#      [ Poly1305 tag                (16 bytes)    ]
-#
-#   Nonce construction per message:
-#      nonce[0..7]  = session_prefix (XOR of robot + client raw nonces)
-#      nonce[8..11] = msg_counter (LE), shared across TX and RX,
-#                     incremented after every message sent or received.
-#
-#   Counter sequence (half-duplex: client always sends first):
-#      0 → client TX (Robot decrypts with msgCounter_=0)
-#      1 → Robot TX (client decrypts with msgCounter_=1)
-#      2 → client TX (Robot decrypts with msgCounter_=2)
-#      ...
-#
 # Usage:
 #   python3 chacha20_console_client.py
 #   python3 chacha20_console_client.py --ip 192.168.1.42 --port 7777
@@ -45,7 +15,9 @@ import argparse, socket, struct, os, sys
 from typing import Tuple
 
 from cryptography.hazmat.primitives.ciphers.aead import ChaCha20Poly1305
-from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
+from cryptography.hazmat.primitives.asymmetric.ed25519 import (
+    Ed25519PublicKey, Ed25519PrivateKey,
+)
 from cryptography.exceptions import InvalidTag, InvalidSignature
 
 # ---------------------------------------------------------------
@@ -72,6 +44,12 @@ CHACHA_KEY = bytes([
 # PLACEHOLDER, need to be filled with the public key of the robot.
 # Left empty, this raises an error.
 ROBOT_PUBKEY_HEX = ""
+
+# The client's private Ed25519 key (32-byte hex). !SECRET!
+# The corresponding public key must be written in ConsoleConfig.h (robot side) 
+# and is used to verify the client's identity during the
+# handshake. Left empty, this raises an error (fail closed).
+CLIENT_SEED_HEX = ""
 
 # ---------------------------------------------------------------
 #  Helpers
@@ -136,15 +114,23 @@ def aead_decrypt(aead: ChaCha20Poly1305,
         raise ValueError("Authentication tag mismatch")
 
 
-# -----------
+# ---------------------------------------------------------------
 #  Handshake 
-# -----------
+# ---------------------------------------------------------------
 
 def do_handshake(s: socket.socket,
-                 robot_pubkey_obj: Ed25519PublicKey) -> Tuple[str, bytes, bytes]:
+                 robot_pubkey_obj: Ed25519PublicKey,
+                 client_privkey_obj: Ed25519PrivateKey) -> Tuple[str, bytes, bytes]:
     """
     Read the banner, exchange nonces, verify the robot's handshake
-    signature, and derive the per-session AEAD key.
+    signature, prove our identity to the robot, and derive the
+    per-session AEAD key.
+
+    Mutual authentication: after verifying the robot, the client signs the
+    same transcript (HANDSHAKE_CONTEXT || robot_nonce || client_nonce) with
+    its own private key and sends the 64-byte detached signature. The robot
+    checks it against the saved CLIENT_ED25519_PK before accepting any
+    encrypted traffic.
 
     Returns (banner_text, session_prefix, session_key).
     Raises ConnectionError if identity verification fails, or if the
@@ -177,6 +163,14 @@ def do_handshake(s: socket.socket,
             "a new identity. Refusing to proceed."
         )
 
+    # --- Prove OUR identity to the robot (mutual auth) ---
+    # Sign the identical transcript the robot just signed. The robot holds
+    # this same message (the two nonces) and verifies the client's signature
+    # against its saved CLIENT_ED25519_PK. No extra round trip: this rides
+    # ahead of the first AEAD command frame.
+    client_sig = client_privkey_obj.sign(transcript)
+    s.sendall(client_sig)
+
     session_prefix = bytes(a ^ b for a, b in zip(raw_nonce[:8], client_nonce[:8]))
 
     return banner.decode("ascii", errors="replace").strip(), session_prefix, CHACHA_KEY
@@ -202,7 +196,7 @@ def main():
 
     if not ROBOT_PUBKEY_HEX:
         print(
-            "ROBOT_PUBKEY_HEX is not set. Run robot_keys_generator.py once "
+            "ROBOT_PUBKEY_HEX is not set. Run keys_generator.py with robot argument once "
             "and paste its printed robot_ed25519_pubkey_hex into this file."
         )
         sys.exit(1)
@@ -210,6 +204,19 @@ def main():
         robot_pubkey_obj = Ed25519PublicKey.from_public_bytes(bytes.fromhex(ROBOT_PUBKEY_HEX))
     except ValueError as e:
         print(f"ROBOT_PUBKEY_HEX is not valid: {e}")
+        sys.exit(1)
+
+    if not CLIENT_SEED_HEX:
+        print(
+            "CLIENT_SEED_HEX is not set. Run keys_generator.py with client argument once "
+            "and paste its printed client_ed25519_seed_hex into this file."
+        )
+        sys.exit(1)
+    try:
+        client_privkey_obj = Ed25519PrivateKey.from_private_bytes(
+            bytes.fromhex(CLIENT_SEED_HEX))
+    except ValueError as e:
+        print(f"CLIENT_SEED_HEX is not valid: {e}")
         sys.exit(1)
 
     # Connect
@@ -223,7 +230,8 @@ def main():
 
     # Handshake: banner, nonce exchange, signature verification
     try:
-        banner, session_prefix, session_key = do_handshake(s, robot_pubkey_obj)
+        banner, session_prefix, session_key = do_handshake(
+            s, robot_pubkey_obj, client_privkey_obj)
     except (ConnectionError, OSError) as e:
         print(f"Handshake failed: {e}")
         s.close()
@@ -231,6 +239,7 @@ def main():
 
     print(f"Banner: {banner}")
     print("Robot identity verified against ROBOT_PUBKEY_HEX.")
+    print("Client identity signature sent (robot verifies against pinned key).")
 
     tx_counter = 0
     rx_counter = 0
