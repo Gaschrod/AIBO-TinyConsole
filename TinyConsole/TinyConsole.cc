@@ -298,7 +298,7 @@ TinyConsole::TinyConsole()
       rxCounter(0),
       pendingClose(false),
       handshakeStage(HS_BANNER_SENT),
-      recvPhase(0),
+      recvPhase(RX_CLIENT_NONCE),
       pendingFrameLen(0),
       motionState(MSTATE_IDLE),
       pendingCmd(MCMD_NONE),
@@ -608,7 +608,7 @@ TinyConsole::ListenCont(ANTENVMSG msg)
     conn.state   = CONNECTION_CONNECTED;
     pendingClose= false;
     handshakeStage= HS_BANNER_SENT;
-    recvPhase   = 0;
+    recvPhase   = RX_CLIENT_NONCE;
 
     // Build 12-byte session nonce:
     //   [0..3]  session ID (LE) monotone per boot, resets on reboot
@@ -676,24 +676,38 @@ TinyConsole::SendCont(ANTENVMSG msg)
 
         case HS_BANNER_SENT:
             // Just sent banner+nonce; wait for the client's nonce.
-            recvPhase= 0;
+            recvPhase= RX_CLIENT_NONCE;
             Receive(NONCE_SIZE, NONCE_SIZE);
             break;
 
         case HS_SIG_SENT:
-            // Just sent our handshake signature. The client verifies it
-            // before sending anything further.
+            // Just sent our handshake signature. The client verifies it,
+            // then sends its own 64-byte signature over the same transcript
+            // (mutual auth). Wait before accepting AEAD traffic.
             handshakeStage= HS_ESTABLISHED;
-            recvPhase= 1;
-            Receive(FRAME_HEADER_SIZE, FRAME_HEADER_SIZE);
+            recvPhase= RX_CLIENT_SIG;
+            Receive(HANDSHAKE_SIG_SIZE, HANDSHAKE_SIG_SIZE);
             break;
 
         case HS_ESTABLISHED:
             // Just sent an ordinary encrypted response.
-            recvPhase= 1;
+            recvPhase= RX_FRAME_HEADER;
             Receive(FRAME_HEADER_SIZE, FRAME_HEADER_SIZE);
             break;
     }
+}
+
+// Name for a ReceivePhase (for debug only)
+static const char*
+ReceivePhaseName(ReceivePhase p)
+{
+    switch (p) {
+        case RX_CLIENT_NONCE:  return "RX_CLIENT_NONCE";
+        case RX_CLIENT_SIG:    return "RX_CLIENT_SIG";
+        case RX_FRAME_HEADER:  return "RX_FRAME_HEADER";
+        case RX_FRAME_BODY:    return "RX_FRAME_BODY";
+    }
+    return "RX_UNKNOWN";
 }
 
 void
@@ -701,7 +715,8 @@ TinyConsole::ReceiveCont(ANTENVMSG msg)
 {
     TCPEndpointReceiveMsg* recvMsg = (TCPEndpointReceiveMsg*)antEnvMsg::Receive(msg);
 
-    OSYSDEBUG(("TinyConsole::ReceiveCont() phase=%d n=%d\n", recvPhase, recvMsg->sizeMin));
+    OSYSDEBUG(("TinyConsole::ReceiveCont() phase=%s n=%d\n",
+               ReceivePhaseName(recvPhase), recvMsg->sizeMin));
 
     if (recvMsg->error == TCP_CONNECTION_CLOSED) {
         OSYSPRINT(("TinyConsole: client disconnected\n"));
@@ -718,9 +733,9 @@ TinyConsole::ReceiveCont(ANTENVMSG msg)
     int n = recvMsg->sizeMin;
 
     // ------------------------------------------------------------------
-    //  Phase 0 -> client nonce (12 bytes, plaintext, handshake only)
+    //  RX_CLIENT_NONCE -> client nonce (12 bytes, plaintext, handshake only)
     // ------------------------------------------------------------------
-    if (recvPhase== 0) {
+    if (recvPhase == RX_CLIENT_NONCE) {
         if (n < NONCE_SIZE) {
             OSYSLOG1((osyslogERROR, "TinyConsole: short client nonce (%d bytes)", n));
             Close();
@@ -729,7 +744,11 @@ TinyConsole::ReceiveCont(ANTENVMSG msg)
 
         uint8_t clientNonce[NONCE_SIZE];
         memcpy(clientNonce, conn.recvData, NONCE_SIZE);
-        
+
+        // Keep a copy: RX_CLIENT_SIG needs it to rebuild the client's signed
+        // transcript, and sessionNonce[0..7] is about to be overwritten.
+        memcpy(clientNonceRecv, clientNonce, NONCE_SIZE);
+
         for (int i = 0; i < 8; i++)
         	sessionNonce[i] ^= clientNonce[i];
         	
@@ -747,9 +766,41 @@ TinyConsole::ReceiveCont(ANTENVMSG msg)
     }
     
     // ------------------------------------------------------------------
-    //  Phase 1 -> 2-byte frame header
+    //  RX_CLIENT_SIG -> client's Ed25519 handshake signature (64 bytes, plaintext)
+    //
+    //  Mutual authentication: the client signs the same transcript the
+    //  robot signed in RX_CLIENT_NONCE (HANDSHAKE_CONTEXT || serverNonceSent
+    //  || clientNonceRecv). Verifying it against the pinned CLIENT_ED25519_PK
+    //  proves its identity. Fail closed on any mismatch.
     // ------------------------------------------------------------------
-    if (recvPhase== 1) {
+    if (recvPhase == RX_CLIENT_SIG) {
+        if (n < HANDSHAKE_SIG_SIZE) {
+            OSYSLOG1((osyslogERROR,
+                      "TinyConsole: short client signature (%d bytes)", n));
+            Close();
+            return;
+        }
+
+        if (!VerifyClientHandshake(conn.recvData)) {
+            OSYSLOG1((osyslogERROR,
+                      "TinyConsole: client identity verification FAILED "
+                      "- rejecting connection"));
+            Close();
+            return;
+        }
+
+        OSYSPRINT(("TinyConsole: client identity verified\n"));
+
+        // Client is now authenticated; proceed to normal AEAD traffic.
+        recvPhase = RX_FRAME_HEADER;
+        Receive(FRAME_HEADER_SIZE, FRAME_HEADER_SIZE);
+        return;
+    }
+
+    // ------------------------------------------------------------------
+    //  RX_FRAME_HEADER -> 2-byte frame header
+    // ------------------------------------------------------------------
+    if (recvPhase == RX_FRAME_HEADER) {
         if (n < FRAME_HEADER_SIZE) {
             OSYSLOG1((osyslogERROR, "TinyConsole: short frame header (%d bytes)", n));
             Close();
@@ -767,15 +818,15 @@ TinyConsole::ReceiveCont(ANTENVMSG msg)
         }
 
         pendingFrameLen= ctLen;
-        recvPhase      = 2;
+        recvPhase      = RX_FRAME_BODY;
         Receive((int)ctLen + FRAME_TAG_SIZE, (int)ctLen + FRAME_TAG_SIZE);
         return;
     }
 
     // ------------------------------------------------------------------
-	// Phase 2 -> AEAD body (ciphertext + 16-byte tag) & Dispatch
+	// RX_FRAME_BODY -> AEAD body (ciphertext + 16-byte tag) & Dispatch
 	// ------------------------------------------------------------------
-	if (recvPhase== 2) {
+	if (recvPhase == RX_FRAME_BODY) {
 		int bodyLen = (int)pendingFrameLen+ FRAME_TAG_SIZE;
     	if (n < bodyLen) {
         	OSYSLOG1((osyslogERROR,
@@ -1089,6 +1140,51 @@ TinyConsole::SignHandshake(const uint8_t* clientNonce,
     }
 
     memcpy(sigOut, sm, HANDSHAKE_SIG_SIZE);
+    return true;
+}
+
+// ================================================================
+//  Handshake verification (client -> robot, mutual auth)
+//
+//  Authenticates the CLIENT to the robot. Rebuilds the exact transcript
+//  the client signed and checks the detached 64-byte signature against
+//  the CLIENT_ED25519_PK. Uses TweetNaCl's combined-form
+//  crypto_sign_open(), reconstructing sm = sig || msg locally (the client
+//  transmits only the 64-byte detached signature; the robot already holds
+//  msg, since it is the two nonces it exchanged).
+// ================================================================
+
+bool
+TinyConsole::VerifyClientHandshake(const uint8_t* clientSig)
+{
+    // Same transcript layout and order as SignHandshake()
+    const int MSG_LEN = HANDSHAKE_CONTEXT_LEN + NONCE_SIZE + NONCE_SIZE;
+
+    uint8_t msg[HANDSHAKE_CONTEXT_LEN + NONCE_SIZE + NONCE_SIZE];
+    memcpy(msg, HANDSHAKE_CONTEXT, HANDSHAKE_CONTEXT_LEN);
+    memcpy(msg + HANDSHAKE_CONTEXT_LEN, serverNonceSent, NONCE_SIZE);
+    memcpy(msg + HANDSHAKE_CONTEXT_LEN + NONCE_SIZE, clientNonceRecv, NONCE_SIZE);
+
+    // crypto_sign_open() consumes the combined form sm = sig(64) || msg
+    uint8_t sm[HANDSHAKE_SIG_SIZE + HANDSHAKE_CONTEXT_LEN + NONCE_SIZE + NONCE_SIZE];
+    memcpy(sm, clientSig, HANDSHAKE_SIG_SIZE);
+    memcpy(sm + HANDSHAKE_SIG_SIZE, msg, MSG_LEN);
+
+    uint8_t m[HANDSHAKE_SIG_SIZE + HANDSHAKE_CONTEXT_LEN + NONCE_SIZE + NONCE_SIZE];
+    unsigned long long mlen = 0;
+
+    // Returns 0 iff the signature is valid for msg under CLIENT_ED25519_PK
+    if (crypto_sign_open(m, &mlen, sm,
+                         (unsigned long long)(HANDSHAKE_SIG_SIZE + MSG_LEN),
+                         (const unsigned char*)CLIENT_ED25519_PK) != 0) {
+        return false;
+    }
+
+    // Defensive: recovered message must match our transcript exactly
+    if (mlen != (unsigned long long)MSG_LEN || memcmp(m, msg, MSG_LEN) != 0) {
+        return false;
+    }
+
     return true;
 }
 

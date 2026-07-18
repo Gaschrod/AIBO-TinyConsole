@@ -75,6 +75,23 @@ enum HandshakeStage {
     HS_ESTABLISHED
 };
 
+// What kind of bytes ReceiveCont() is expecting on its next invocation.
+// These are LABELS and the runtime order is
+//
+//   RX_CLIENT_NONCE -> RX_CLIENT_SIG -> RX_FRAME_HEADER -> RX_FRAME_BODY
+//                                          ^------------------------|
+//                                          (header/body then loop for
+//                                           every subsequent message)
+//
+// The nonce and client-signature phases run exactly once, during the
+// handshake; header and body alternate for the lifetime of the session.
+enum ReceivePhase {
+    RX_CLIENT_NONCE,    // 12-byte client nonce contribution (handshake)
+    RX_CLIENT_SIG,      // 64-byte client Ed25519 signature  (handshake, mutual auth)
+    RX_FRAME_HEADER,    // 2-byte AEAD frame length header    (steady state)
+    RX_FRAME_BODY       // ciphertext + 16-byte Poly1305 tag  (steady state)
+};
+
 // High-level command issued from the TCP console.
 // Stored in pendingCmd_ and applied at the next Ready() phase boundary.
 enum MotionCmd {
@@ -169,6 +186,12 @@ private:
     bool SignHandshake (const uint8_t* clientNonce,
                         uint8_t sigOut[HANDSHAKE_SIG_SIZE]);
 
+    // Verifies the client's 64-byte handshake signature over the same
+    // transcript the robot just signed (HANDSHAKE_CONTEXT ||
+    // serverNonceSent_ || clientNonce), using the CLIENT_ED25519_PK.
+    // Returns true only on a valid signature over the expected transcript.
+    bool VerifyClientHandshake (const uint8_t* clientSig);
+
     // ================================================================
     //  Motion constants
     // ===============================================================
@@ -249,8 +272,13 @@ private:
     // the client-nonce XOR before the handshake signature is computed.
     uint8_t  serverNonceSent[NONCE_SIZE];
 
-    // Two-phase receive state
-    int      recvPhase;
+    // The client's raw nonce, captured in phase 0. Needed again in phase 3
+    // to rebuild the exact transcript the client signed for mutual auth.
+    uint8_t  clientNonceRecv[NONCE_SIZE];
+
+    // Receive-phase state: which kind of bytes we expect next.
+    // See enum ReceivePhase
+    ReceivePhase recvPhase;
     uint16_t pendingFrameLen;
 
     static uint32_t sessionId;
