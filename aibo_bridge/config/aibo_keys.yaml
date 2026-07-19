@@ -1,0 +1,17 @@
+# aibo_keys.yaml  —  key material for the AIBO bridge node
+#
+# For non-default location:
+#   ros2 launch aibo_bridge aibo_bridge_launch.py params_file:=/path/to/aibo_keys.yaml
+#
+# The node will not start if any value is left empty.
+
+/**:
+  ros__parameters:
+    # 32-byte ChaCha20 key, 64 hex chars. Must match ConsoleConfig.h.
+    chacha_key: "12542603DD413F07DB8C205B318E1CF877CB506338BBBA32AFB8F0B46ABA9CA7"
+
+    # Robot's 32-byte Ed25519 public key, 64 hex chars (pinned, out-of-band).
+    robot_ed25519_pubkey: "e3a44431b3ca89de431e032fb298abb566dccf645c33f0135b9d4c65a3d67d9b"
+
+    # Client's 32-byte Ed25519 secret seed, 64 hex chars (our signing identity).
+    client_ed25519_seed: "eceecf0e203dae62a26ec14ad33645d866decb9c5b5e0f56b3088fceaeff36e5"

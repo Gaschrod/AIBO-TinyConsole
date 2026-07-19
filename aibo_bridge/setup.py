@@ -16,6 +16,7 @@ setup(
         ),
         # Install package.xml
         (f"share/{package_name}", ["package.xml"]),
+        (os.path.join("share", package_name, "config"), glob("config/*.yaml")),
         # Install launch files
         (
             os.path.join("share", package_name, "launch"),
