@@ -1188,18 +1188,6 @@ TinyConsole::VerifyClientHandshake(const uint8_t* clientSig)
     return true;
 }
 
-// TweetNaCl declares "randombytes" extern and calls it internally from
-// crypto_sign_keypair() / crypto_box_keypair(). 
-// This only exists so the linker has something to resolve -> if it ever
-// actually runs, something upstream is badly wrong.
-extern "C" void
-randombytes(unsigned char* buf, unsigned long long n)
-{
-    OSYSLOG1((osyslogERROR,
-              "TinyConsole: randombytes() called -- should be unreachable"));
-    memset(buf, 0, n);
-}
-
 // ================================================================
 //  Motion helpers
 // ================================================================

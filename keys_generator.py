@@ -46,10 +46,10 @@ def main():
         print(bar)
         return
 
-    sk = Ed25519PrivateKey.generate()
-    seed = sk.private_bytes_raw()               # 32-byte seed
-    pk = sk.public_key().public_bytes_raw()     # 32-byte public key
-    combined = seed + pk                         # 64-byte TweetNaCl "SK"
+    gen = Ed25519PrivateKey.generate()
+    sk = gen.private_bytes_raw()               # 32-byte secret key
+    pk = gen.public_key().public_bytes_raw()     # 32-byte public key
+    combined = sk + pk                         # 64-byte TweetNaCl "SK"
 
     if args.role == "robot":
         print(bar)
@@ -72,7 +72,7 @@ def main():
         print(bar)
         print(" chacha20_console_client.py  (client's !secret! key):")
         print(bar)
-        print(f'CLIENT_PRIVATE_KEY_HEX = "{seed.hex()}"')
+        print(f'CLIENT_PRIVATE_KEY_HEX = "{sk.hex()}"')
         print()
         print(f"# (client public key, for reference: {pk.hex()})")
 

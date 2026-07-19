@@ -16,7 +16,7 @@ CXXFLAGS= \
 	-I$(OPENRSDK_ROOT)/OPEN_R/include
 
 CXXFLAGS+= -DOPENR_DEBUG
-CFLAGS= -O2 -g -I. -DPOLY1305_16BIT
+CFLAGS= -O2 -g -I. -DPOLY1305_32BIT
 
 .PHONY: all install clean
 
@@ -44,4 +44,3 @@ clean:
 	rm -f *.o *.bin *.elf *.snap.cc
 	rm -f TinyConsoleStub.h TinyConsoleStub.cc def.h entry.h
 	rm -f $(INSTALLDIR)/OPEN-R/MW/OBJS/TINYCONS.BIN
-
