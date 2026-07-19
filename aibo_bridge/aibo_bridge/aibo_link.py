@@ -19,7 +19,15 @@ Protocol recap (half-duplex, client always sends first):
      This is what lets a client tell "the real robot" apart from
      anything else that merely has a copy of `key` (the ChaCha key),
      which is far more exposed than the Ed25519 secret ever needs to be.
-  5. Every subsequent message is an RFC-7539-style AEAD frame:
+  5. Mutual authentication: the client signs the identical transcript
+     the robot just signed (HANDSHAKE_CONTEXT || robot's raw nonce ||
+     client's raw nonce) with its own persistent Ed25519 key and sends
+     the 64-byte detached signature (plaintext). The robot verifies it
+     against the publiv kry CLIENT_ED25519_PK in ConsoleConfig.h before
+     accepting any encrypted traffic. No extra round trip: this rides
+     ahead of the first AEAD command frame. Matches TinyConsole.cc's
+     RX_CLIENT_SIG phase byte-for-byte.
+  6. Every subsequent message is an RFC-7539-style AEAD frame:
        [ uint16 LE ciphertext_length ][ ciphertext ][ 16-byte Poly1305 tag ]
      Nonce = session_prefix[0..7] + msg_counter[8..11]
      Client-TX counter has high bit clear; server-TX has high bit set.
@@ -30,7 +38,9 @@ from typing import Optional
 
 from cryptography.exceptions import InvalidTag, InvalidSignature
 from cryptography.hazmat.primitives.ciphers.aead import ChaCha20Poly1305
-from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
+from cryptography.hazmat.primitives.asymmetric.ed25519 import (
+    Ed25519PublicKey, Ed25519PrivateKey,
+)
 
 NONCE_SIZE     = 12
 HANDSHAKE_SIG_SIZE = 64
@@ -100,7 +110,8 @@ class AiboLink:
 
     Typical usage::
 
-        link = AiboLink("192.168.1.124", 7777, key_bytes, robot_pubkey_bytes)
+        link = AiboLink("192.168.1.124", 7777, key_bytes,
+                        robot_pubkey_bytes, client_seed_bytes)
         banner = link.connect()
         response = link.send_command("GET_UP")
         link.disconnect()          # sends QUIT, then closes
@@ -108,11 +119,14 @@ class AiboLink:
         link.close()               # force-closes without QUIT
     """
 
-    def __init__(self, robot_ip: str, port: int, key: bytes, robot_pubkey: bytes) -> None:
+    def __init__(self, robot_ip: str, port: int, key: bytes,
+                 robot_pubkey: bytes, client_seed: bytes) -> None:
         if len(key) != 32:
             raise ValueError(f"ChaCha20 key must be 32 bytes, got {len(key)}")
         if len(robot_pubkey) != 32:
             raise ValueError(f"robot_pubkey must be 32 bytes, got {len(robot_pubkey)}")
+        if len(client_seed) != 32:
+            raise ValueError(f"client_seed must be 32 bytes, got {len(client_seed)}")
         self.robot_ip = robot_ip
         self.port     = port
         self.key      = key
@@ -122,6 +136,9 @@ class AiboLink:
         # use, which would accept whatever key shows up on the very first
         # connection with no external check at all.
         self.robot_pubkey_obj = Ed25519PublicKey.from_public_bytes(robot_pubkey)
+
+        # The client's own persistent Ed25519 identity. 
+        self.client_privkey_obj = Ed25519PrivateKey.from_private_bytes(client_seed)
 
         self.sock:           Optional[socket.socket]  = None
         self.aead:           Optional[ChaCha20Poly1305] = None
@@ -181,6 +198,13 @@ class AiboLink:
                 "robot_pubkey is stale after the robot was re-flashed with "
                 "a new identity. Refusing to proceed."
             )
+
+        # --- Prove OUR identity to the robot (mutual auth) ---
+        # Sign the identical transcript the robot just signed. The robot holds
+        # this same message (the two nonces) and verifies our signature against
+        # its saved CLIENT_ED25519_PK (TinyConsole.cc RX_CLIENT_SIG phase).
+        client_sig = self.client_privkey_obj.sign(transcript)
+        s.sendall(client_sig)
 
         # XOR bytes [0..7] to build the session prefix.
         # Bytes [8..11] are the per-message counter, managed by _build_nonce.

@@ -6,6 +6,13 @@ override them from the command line without editing source:
 
   ros2 launch aibo_bridge aibo_bridge.launch.py robot_ip:=192.168.1.124
   ros2 launch aibo_bridge aibo_bridge.launch.py robot_ip:=10.0.0.42 robot_port:=7777
+  
+  ros2 launch aibo_bridge aibo_bridge.launch.py 
+        robot_ip:=<IP> 
+        robot_port:=<PORT> 
+        robot_ed25519_pubkey:=<64 hex chars> 
+        client_ed25519_seed:=<64 hex chars>
+
 """
 
 from launch import LaunchDescription
@@ -33,12 +40,7 @@ def generate_launch_description() -> LaunchDescription:
         DeclareLaunchArgument(
             "chacha_key",
             # Default matches ConsoleConfig.h — override in production.
-            default_value=(
-                "0000000000000000"
-                "0000000000000000"
-                "0000000000000000"
-                "0000000000000000"
-            ),
+            default_value="",
             description="32-byte ChaCha20 key as 64 hex characters",
         ),
         DeclareLaunchArgument(
@@ -47,6 +49,16 @@ def generate_launch_description() -> LaunchDescription:
             description=(
                 "32-byte Ed25519 public key as 64 hex characters. "
                 "The node fails if this is left empty."
+            ),
+        ),
+        DeclareLaunchArgument(
+            "client_ed25519_seed",
+            default_value="",
+            description=(
+                "32-byte Ed25519 secret seed as 64 hex characters. The "
+                "client's own identity: it signs the handshake so the robot "
+                "can verify us against its pinned CLIENT_ED25519_PK. The node "
+                "fails if this is left empty."
             ),
         ),
         DeclareLaunchArgument(
@@ -78,6 +90,7 @@ def generate_launch_description() -> LaunchDescription:
                 "robot_port":      LaunchConfiguration("robot_port"),
                 "chacha_key":      LaunchConfiguration("chacha_key"),
                 "robot_ed25519_pubkey": LaunchConfiguration("robot_ed25519_pubkey"),
+                "client_ed25519_seed": LaunchConfiguration("client_ed25519_seed"),
                 "cmd_vel_deadband": LaunchConfiguration("cmd_vel_deadband"),
                 "reconnect_period": LaunchConfiguration("reconnect_period"),
             }

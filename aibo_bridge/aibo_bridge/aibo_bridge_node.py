@@ -29,6 +29,11 @@ Published
   chacha_key        (string)   32-byte key as 64 hex chars
                                (default matches ConsoleConfig.h)
   robot_ed25519_pubkey (string) 32-byte Ed25519 public key as 64 hex chars. Required: the node won't start without it.
+  client_ed25519_seed (string) 32-byte Ed25519 private seed as 64 hex chars.
+                               The client's own identity: it signs the handshake
+                               transcript so the robot can verify us against its
+                               pinned CLIENT_ED25519_PK. Required: the node won't
+                               start without it (must never be committed).
   cmd_vel_deadband  (double)   |linear.x| threshold m/s  [0.05]
   reconnect_period  (double)   seconds between reconnect attempts [5.0]
 
@@ -57,16 +62,6 @@ from geometry_msgs.msg import Twist
 
 from aibo_bridge.aibo_link import AiboLink
 
-# Default key — matches ConsoleConfig.h / chacha20_console_client.py.
-# Override with the 'chacha_key' ROS 2 parameter; never commit a real
-# production key to source control.
-CHACHA20_KEY = (
-    "0000000000000000"
-    "0000000000000000"
-    "0000000000000000"
-    "0000000000000000"
-)
-
 # Commands that TinyConsole accepts (upper-case, used for validation).
 VALID_COMMANDS = {"GET_UP", "REST", "FORWARD", "BACK", "STOP", "PING", "QUIT"}
 
@@ -84,8 +79,9 @@ class AiboBridgeNode(Node):
         # ----------------------------------------------------------
         self.declare_parameter("robot_ip", "192.168.1.124")
         self.declare_parameter("robot_port", 7777)
-        self.declare_parameter("chacha_key", CHACHA20_KEY)
+        self.declare_parameter("chacha_key", "")
         self.declare_parameter("robot_ed25519_pubkey", "")
+        self.declare_parameter("client_ed25519_seed", "")
         self.declare_parameter("cmd_vel_deadband", 0.05)
         self.declare_parameter("reconnect_period", 5.0)
 
@@ -93,6 +89,7 @@ class AiboBridgeNode(Node):
         robot_port = self.get_parameter("robot_port").value
         key_hex   = self.get_parameter("chacha_key").value
         pubkey_hex = self.get_parameter("robot_ed25519_pubkey").value
+        client_seed_hex = self.get_parameter("client_ed25519_seed").value
         self.deadband = float(self.get_parameter("cmd_vel_deadband").value)
         reconnect_period = float(self.get_parameter("reconnect_period").value)
 
@@ -134,10 +131,35 @@ class AiboBridgeNode(Node):
             self.get_logger().fatal(msg)
             raise ValueError(msg)
 
+        # Parse and validate the client's own Ed25519 secret seed.
+        # Private half of the client's identity, used to sign the handshake so the robot can
+        # authenticate against its pinned CLIENT_ED25519_PK.
+        if not client_seed_hex:
+            msg = (
+                "client_ed25519_seed is not set. Run the generator with "
+                "--role client once to generate the client's identity key pair,"
+                "flash CLIENT_ED25519_PK into ConsoleConfig.h, "
+                "and pass the printed secret seed hex here via "
+                "this launch parameter. Never commit it."
+            )
+            self.get_logger().fatal(msg)
+            raise ValueError(msg)
+        try:
+            client_seed = bytes.fromhex(client_seed_hex)
+        except ValueError as exc:
+            self.get_logger().fatal(
+                f"client_ed25519_seed is not valid hex: {exc}"
+            )
+            raise
+        if len(client_seed) != 32:
+            msg = f"client_ed25519_seed must decode to 32 bytes, got {len(client_seed)}"
+            self.get_logger().fatal(msg)
+            raise ValueError(msg)
+
         # ----------------------------------------------------------
         # Link + synchronisation
         # ----------------------------------------------------------
-        self.link = AiboLink(robot_ip, robot_port, key, robot_pubkey)
+        self.link = AiboLink(robot_ip, robot_port, key, robot_pubkey, client_seed)
         self.lock = threading.Lock()          # serialises AEAD exchanges
         self.last_motion_cmd: Optional[str] = None  # debounce state
 
