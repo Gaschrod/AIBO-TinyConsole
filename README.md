@@ -1,1 +1,1 @@
-# Master_thesis_git
+# AIBO Secure Console
