@@ -19,7 +19,7 @@ setup(
         # Install launch files
         (
             os.path.join("share", package_name, "launch"),
-            glob("launch/*.launch.py"),
+            glob("launch/*_launch.py"),
         ),
     ],
     install_requires=["setuptools"],
