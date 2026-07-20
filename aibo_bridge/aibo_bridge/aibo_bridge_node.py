@@ -63,7 +63,7 @@ from geometry_msgs.msg import Twist
 from aibo_bridge.aibo_link import AiboLink
 
 # Commands that TinyConsole accepts (upper-case, used for validation).
-VALID_COMMANDS = {"GET_UP", "REST", "FORWARD", "BACK", "STOP", "PING", "QUIT"}
+VALID_COMMANDS = {"GET_UP", "REST", "FORWARD", "BACK", "STOP", "HELP", "INFO", "PING", "QUIT"}
 
 # Motion commands that affect the AIBO's movement state (used for debouncing).
 MOTION_COMMANDS = {"FORWARD", "BACK", "STOP"}
@@ -71,8 +71,8 @@ MOTION_COMMANDS = {"FORWARD", "BACK", "STOP"}
 
 class AiboBridgeNode(Node):
 
-    def __init__(self) -> None:
-        super().__init__("aibo_bridge")
+    def init(self) -> None:
+        super().init("aibo_bridge")
 
         # ----------------------------------------------------------
         # Parameters
@@ -178,6 +178,11 @@ class AiboBridgeNode(Node):
         self.create_subscription(
             Twist, "/cmd_vel", self.cmd_vel_cb, 10
         )
+
+        self.declare_parameter("motion_timeout", 1.0) # seconds without a /cmd_vel before sending STOP
+        self.motion_timeout = float(self.get_parameter("motion_timeout").value)
+        self.last_cmd_vel_time = self.get_clock().now()
+        self.create_timer(0.2, self.motion_timeout_cb)  # check for timeout every 100ms
 
         # ----------------------------------------------------------
         # Reconnection timer
@@ -306,6 +311,8 @@ class AiboBridgeNode(Node):
         turn command).  Commands are debounced: we only send when the
         desired state changes, so a held joystick does not spam frames.
         """
+        self.last_cmd_vel_time = self.get_clock().now()
+        
         lx = msg.linear.x
 
         if lx > self.deadband:
@@ -336,6 +343,15 @@ class AiboBridgeNode(Node):
                     pass
                 self.link.disconnect()
         super().destroy_node()
+
+    def motion_timeout_cb(self) -> None:
+        if self.last_motion_cmd in ("FORWARD", "BACK"):
+            elapsed = (self.get_clock().now() - self.last_cmd_vel_time).nanoseconds / 1e9
+            if elapsed > self.motion_timeout:
+                self.get_logger().warn("cmd_vel timeout — sending STOP (deadman)")
+                self.last_motion_cmd = "STOP"
+                self.send("STOP")
+
 
 
 # ================================================================

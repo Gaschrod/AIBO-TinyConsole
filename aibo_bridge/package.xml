@@ -3,14 +3,14 @@
             schematypens="http://www.w3.org/2001/XMLSchema"?>
 <package format="3">
   <name>aibo_bridge</name>
-  <version>0.1.0</version>
+  <version>1.0</version>
   <description>
     ROS 2 bridge node for the Sony AIBO ERS-7 TinyConsole.
     Wraps the ChaCha20-Poly1305 AEAD TCP client and exposes the AIBO
     as a ROS 2 node with a ~/command topic, a /cmd_vel subscriber for
     teleop, and a ~/connected status publisher.
   </description>
-  <maintainer email="you@example.com">you</maintainer>
+  <maintainer email="alexis.regardin@ulb.be">you</maintainer>
   <license>MIT</license>
 
   <!-- ROS 2 runtime dependencies -->
@@ -18,8 +18,8 @@
   <depend>std_msgs</depend>
   <depend>geometry_msgs</depend>
 
-  <!-- Python dependency: install with  pip install cryptography -->
-  <!-- (not a ROS package, so listed as a comment for clarity)  -->
+  <exec_depend>python3-cryptography</exec_depend>
+  <exec_depend>ros2launch</exec_depend>
 
   <!-- Build / test tooling -->
   <test_depend>ament_copyright</test_depend>

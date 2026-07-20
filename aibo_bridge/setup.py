@@ -16,11 +16,15 @@ setup(
         ),
         # Install package.xml
         (f"share/{package_name}", ["package.xml"]),
-        (os.path.join("share", package_name, "config"), glob("config/*.yaml")),
         # Install launch files
         (
             os.path.join("share", package_name, "launch"),
             glob("launch/*_launch.py"),
+        ),
+        # Install YAML config (key material template, etc.)
+        (
+            os.path.join("share", package_name, "config"),
+            glob("config/*.yaml"),
         ),
     ],
     install_requires=["setuptools"],
@@ -34,6 +38,8 @@ setup(
         "console_scripts": [
             # ros2 run aibo_bridge aibo_bridge_node
             "aibo_bridge_node = aibo_bridge.aibo_bridge_node:main",
+            # ros2 run aibo_bridge aibo_teleop_key
+            "aibo_teleop_key = aibo_bridge.aibo_teleop_key:main",
         ],
     },
 )
