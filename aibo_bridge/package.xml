@@ -3,7 +3,7 @@
             schematypens="http://www.w3.org/2001/XMLSchema"?>
 <package format="3">
   <name>aibo_bridge</name>
-  <version>1.0</version>
+  <version>1.0.0</version>
   <description>
     ROS 2 bridge node for the Sony AIBO ERS-7 TinyConsole.
     Wraps the ChaCha20-Poly1305 AEAD TCP client and exposes the AIBO
