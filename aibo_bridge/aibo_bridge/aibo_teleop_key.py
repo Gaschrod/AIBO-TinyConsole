@@ -1,7 +1,7 @@
 """
 aibo_teleop_key.py
 
-Keyboard teleop for the AIBO bridge, same principle as
+Keyboard teleop for the AIBO bridge, in the spirit of
 teleop_twist_keyboard but mapping keys to the AIBO's command set.
 
 Key map
@@ -29,6 +29,7 @@ Motion goes through /cmd_vel (not the command topic) so the bridge's
 existing deadband + debounce handles it and a single STOP is sent on release.
 """
 
+import os
 import sys
 import select
 import threading
@@ -51,6 +52,9 @@ AIBO keyboard teleop
 
 Motion is hold-to-move: release the arrow and the robot stops.
 """
+
+# Final byte of an arrow escape sequence -> logical key.
+_ARROWS = {0x41: "UP", 0x42: "DOWN", 0x43: "RIGHT", 0x44: "LEFT"}
 
 
 class AiboTeleopKey(Node):
@@ -75,7 +79,8 @@ class AiboTeleopKey(Node):
         self.pub_command = self.create_publisher(String, command_topic, 10)
         self.pub_cmd_vel = self.create_publisher(Twist, cmd_vel_topic, 10)
 
-        self.moving = False  # True while a FORWARD/BACK Twist is active
+        self.moving = False        # True while a FORWARD/BACK Twist is active
+        self._last_label = None    # last motion label logged (debounce logging)
 
     # ------------------------------------------------------------------
     # Publishing functions
@@ -93,6 +98,17 @@ class AiboTeleopKey(Node):
         self.pub_cmd_vel.publish(twist)
         self.moving = linear_x != 0.0
 
+        if linear_x > 0:
+            label = "FORWARD"
+        elif linear_x < 0:
+            label = "BACK"
+        else:
+            label = "STOP"
+        # Log only on change so auto-repeat doesn't spam the console.
+        if label != self._last_label:
+            self.get_logger().info(f"cmd_vel -> {label}")
+            self._last_label = label
+
     def stop(self) -> None:
         """Publish a zero Twist once"""
         self.send_motion(0.0)
@@ -103,11 +119,12 @@ class AiboTeleopKey(Node):
 
     def run(self) -> None:
         print(BANNER)
-        settings = termios.tcgetattr(sys.stdin)
+        fd = sys.stdin.fileno()
+        settings = termios.tcgetattr(fd)
         try:
-            tty.setraw(sys.stdin.fileno())
+            tty.setraw(fd)
             while rclpy.ok():
-                key = self._read_key(self.key_timeout)
+                key = self._read_key(fd, self.key_timeout)
 
                 if key is None:
                     # Timeout: no key within key_timeout -> stop if we were moving.
@@ -134,38 +151,35 @@ class AiboTeleopKey(Node):
                 self.stop()
             except Exception:
                 pass
-            termios.tcsetattr(sys.stdin, termios.TCSADRAIN, settings)
+            termios.tcsetattr(fd, termios.TCSADRAIN, settings)
 
     @staticmethod
-    def _read_key(timeout: float):
+    def _read_key(fd: int, timeout: float):
         """
         Return one logical key: 'UP'/'DOWN'/'LEFT'/'RIGHT'/'ENTER'/'CTRL_C',
         a single character, or None if `timeout` elapsed with no input.
-        Arrow keys arrive as the escape sequence ESC [ A/B/C/D.
+
+        Reads directly from the fd with os.read so multi-byte arrow escape
+        sequences (ESC [ A or ESC O A) arrive intact in one call.
         """
-        rlist, _, _ = select.select([sys.stdin], [], [], timeout)
+        rlist, _, _ = select.select([fd], [], [], timeout)
         if not rlist:
             return None
 
-        c = sys.stdin.read(1)
-        if c == "\x03":
+        data = os.read(fd, 8)   # whole escape sequence comes atomically
+        if not data:
+            return None
+
+        if data == b"\x03":
             return "CTRL_C"
-        if c in ("\r", "\n"):
+        if data in (b"\r", b"\n"):
             return "ENTER"
-        if c == "\x1b":
-            # Possible arrow escape sequence; peek the next two bytes quickly.
-            r2, _, _ = select.select([sys.stdin], [], [], 0.01)
-            if not r2:
-                return "ESC"
-            if sys.stdin.read(1) != "[":
-                return "ESC"
-            r3, _, _ = select.select([sys.stdin], [], [], 0.01)
-            if not r3:
-                return "ESC"
-            return {"A": "UP", "B": "DOWN", "C": "RIGHT", "D": "LEFT"}.get(
-                sys.stdin.read(1), "ESC"
-            )
-        return c
+        if data[:1] == b"\x1b":
+            # Arrow: ESC [ X  or  ESC O X  (application-cursor mode).
+            if len(data) >= 3 and data[1] in (0x5B, 0x4F):
+                return _ARROWS.get(data[2], "ESC")
+            return "ESC"
+        return data.decode("utf-8", "ignore")
 
 
 def main(args=None) -> None:
