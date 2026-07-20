@@ -75,7 +75,7 @@ class AiboTeleopJoy(Node):
 
         # --- Axis / button map (DS4 via standard joy_node defaults) ------
         self.declare_parameter("axis_linear", 1)      # left stick, vertical
-        self.declare_parameter("invert_linear", True)  # push-forward -> FORWARD
+        self.declare_parameter("invert_linear", False)  # push-forward -> FORWARD
         self.declare_parameter("button_get_up", 0)    # Cross  (X)
         self.declare_parameter("button_rest", 1)      # Circle (O)
         self.declare_parameter("button_stop", 3)      # Square
@@ -158,16 +158,16 @@ class AiboTeleopJoy(Node):
         self.target_linear = raw * self.speed
 
         # --- Buttons: act on the press edge only ----------------------
-        if self._pressed(msg, self.button_stop):
+        if self.pressed(msg, self.button_stop):
             self.stop()
-        if self._pressed(msg, self.button_get_up):
+        if self.pressed(msg, self.button_get_up):
             self.send_command("GET_UP")
-        if self._pressed(msg, self.button_rest):
+        if self.pressed(msg, self.button_rest):
             self.send_command("REST")
 
         self._prev_buttons = list(msg.buttons)
 
-    def _pressed(self, msg: Joy, index: int) -> bool:
+    def pressed(self, msg: Joy, index: int) -> bool:
         """True on the rising edge (0 -> 1) of the button at `index`."""
         if not (0 <= index < len(msg.buttons)):
             return False
