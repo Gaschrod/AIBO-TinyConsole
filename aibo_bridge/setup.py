@@ -40,6 +40,7 @@ setup(
             "aibo_bridge_node = aibo_bridge.aibo_bridge_node:main",
             # ros2 run aibo_bridge aibo_teleop_key
             "aibo_teleop_key = aibo_bridge.aibo_teleop_key:main",
+            "aibo_teleop_joy = aibo_bridge.aibo_teleop_joy:main",
         ],
     },
 )
