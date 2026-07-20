@@ -26,19 +26,23 @@ from cryptography.exceptions import InvalidTag, InvalidSignature
 #  Robot IP/port are parameters
 # ---------------------------------------------------------------
 DEFAULT_ROBOT_IP = "192.168.1.124"
-DEFAULT_PORT     = 7777
+DEFAULT_PORT = 7777
 
-NONCE_SIZE         = 12
-FRAME_TAG_SIZE     = 16
+NONCE_SIZE = 12
+FRAME_TAG_SIZE = 16
 HANDSHAKE_SIG_SIZE = 64
+
+PAD_BLOCK = 256        # fixed padded-plaintext size (must match ConsoleConfig.h)
+PAD_LEN_PREFIX = 2     # inner uint16 LE real length
+
 # Must match HANDSHAKE_CONTEXT in ConsoleConfig.h byte-for-byte.
 HANDSHAKE_CONTEXT  = b"AIBO-TinyConsole-Handshake"
 
 CHACHA_KEY = bytes([
-    0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0,
-    0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0,
-    0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0,
-    0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00
 ])
 
 # PLACEHOLDER, need to be filled with the public key of the robot.
@@ -52,7 +56,7 @@ ROBOT_PUBKEY_HEX = ""
 CLIENT_SEED_HEX = ""
 
 # ---------------------------------------------------------------
-#  Helpers
+#  Functions
 # ---------------------------------------------------------------
 
 def recv_exact(sock: socket.socket, n: int) -> bytes:
@@ -83,12 +87,19 @@ def aead_encrypt(aead: ChaCha20Poly1305,
                  nonce: bytes,
                  plaintext: bytes) -> bytes:
     """
-    Encrypt plaintext and return a complete wire frame:
-      [2-byte LE ciphertext length][ciphertext][16-byte Poly1305 tag]
+    Pad plaintext to a fixed block and return a complete wire frame:
+      [2-byte LE block size (constant)][ciphertext: PAD_BLOCK][16-byte tag]
+    Inner padded layout: [uint16 LE real_len][payload][zero padding].
     """
-    header = struct.pack("<H", len(plaintext))
-
-    ct_and_tag = aead.encrypt(nonce, plaintext, header)   # Header = additional authenticated data (AAD)
+    if len(plaintext) > PAD_BLOCK - PAD_LEN_PREFIX:
+        raise ValueError(
+            f"message too large for one block: {len(plaintext)} "
+            f"(max {PAD_BLOCK - PAD_LEN_PREFIX})"
+        )
+    padded = (struct.pack("<H", len(plaintext)) + plaintext).ljust(
+        PAD_BLOCK, b"\x00")
+    header = struct.pack("<H", PAD_BLOCK)           # constant on the wire
+    ct_and_tag = aead.encrypt(nonce, padded, header)  # header = AAD
     ct  = ct_and_tag[:-FRAME_TAG_SIZE]
     tag = ct_and_tag[-FRAME_TAG_SIZE:]
     return header + ct + tag
@@ -98,20 +109,27 @@ def aead_decrypt(aead: ChaCha20Poly1305,
                  nonce: bytes,
                  sock: socket.socket) -> bytes:
     """
-    Read one AEAD frame from sock, verify its tag, and return the plaintext.
-    Raises ValueError on authentication failure.
+    Read one fixed-size AEAD frame, verify its tag, remove padding and return the
+    *real* plaintext. Raises ValueError on authentication failure.
     """
     header = recv_exact(sock, 2)
     ct_len = struct.unpack("<H", header)[0]
+    if ct_len != PAD_BLOCK:
+        raise ValueError(f"unexpected block size {ct_len} (expected {PAD_BLOCK})")
 
     body = recv_exact(sock, ct_len + FRAME_TAG_SIZE)
     ct  = body[:ct_len]
     tag = body[ct_len:]
 
     try:
-        return aead.decrypt(nonce, ct + tag, header)
+        padded = aead.decrypt(nonce, ct + tag, header)
     except InvalidTag:
         raise ValueError("Authentication tag mismatch")
+
+    real_len = struct.unpack_from("<H", padded, 0)[0]
+    if real_len > PAD_BLOCK - PAD_LEN_PREFIX:
+        raise ValueError(f"bad inner length {real_len}")
+    return padded[PAD_LEN_PREFIX:PAD_LEN_PREFIX + real_len]
 
 
 # ---------------------------------------------------------------

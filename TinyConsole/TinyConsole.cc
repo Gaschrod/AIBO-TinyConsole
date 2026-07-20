@@ -810,9 +810,10 @@ TinyConsole::ReceiveCont(ANTENVMSG msg)
         uint16_t ctLen = (uint16_t)( (unsigned char)conn.recvData[0]        )
                        | (uint16_t)(((unsigned char)conn.recvData[1]) << 8  );
 
-        if (ctLen == 0 || ctLen > (uint16_t)CONSOLE_MAX_PLAINTEXT) {
+        if (ctLen != PAD_BLOCK) {
             OSYSLOG1((osyslogERROR,
-                      "TinyConsole: bad frame ciphertext length %u", ctLen));
+                      "TinyConsole: unexpected frame length %u (expected %u)",
+                      ctLen, (unsigned)PAD_BLOCK));
             Close();
             return;
         }
@@ -927,7 +928,7 @@ TinyConsole::CloseCont(ANTENVMSG msg)
 }
 
 // ================================================================
-//  Private TCP helpers
+//  Private TCP functions
 // ================================================================
 
 OStatus
@@ -1012,7 +1013,7 @@ TinyConsole::Close()
 }
 
 // ================================================================
-//  AEAD helpers
+//  AEAD functions
 // ================================================================
 
 void
@@ -1030,33 +1031,46 @@ bool
 TinyConsole::AeadEncrypt(const byte* plaintext, int ptLen,
                           byte* frameOut, int* frameLen)
 {
-    if (ptLen <= 0 || ptLen > CONSOLE_MAX_PLAINTEXT) {
+    // Fixed-size padding: every frame carries exactly PAD_BLOCK plaintext
+    // Inner layout:
+    //   [uint16 LE real_len][payload][padding].
+    if (ptLen <= 0 || ptLen > (PAD_BLOCK - PAD_LEN_PREFIX)) {
         OSYSLOG1((osyslogERROR,
-                  "TinyConsole::AeadEncrypt bad ptLen %d", ptLen));
-        return false;
+                  "TinyConsole::AeadEncrypt payload too large for block: "
+                  "%d (max %d)", ptLen, PAD_BLOCK - PAD_LEN_PREFIX));
+        return false;   // fail closed: message does not fit one block
     }
+
+    // Build the padded plaintext block.
+    uint8_t padded[PAD_BLOCK];
+    padded[0] = (uint8_t)( ptLen       & 0xFF);
+    padded[1] = (uint8_t)((ptLen >> 8) & 0xFF);
+    memcpy(padded + PAD_LEN_PREFIX, plaintext, ptLen);
+    memset(padded + PAD_LEN_PREFIX + ptLen, 0,
+           PAD_BLOCK - PAD_LEN_PREFIX - ptLen);
 
     AdvanceNonce(txCounter, true);
 
     chacha20poly1305_ctx ctx;
     rfc7539_init(&ctx, (uint8_t*)CHACHA_KEY, sessionNonce);
 
-    frameOut[0] = (uint8_t)( ptLen       & 0xFF);
-    frameOut[1] = (uint8_t)((ptLen >> 8) & 0xFF);
+    // Outer header is now the constant block size (leaks nothing).
+    frameOut[0] = (uint8_t)( PAD_BLOCK       & 0xFF);
+    frameOut[1] = (uint8_t)((PAD_BLOCK >> 8) & 0xFF);
 
-	rfc7539_auth(&ctx, frameOut, FRAME_HEADER_SIZE);
+    rfc7539_auth(&ctx, frameOut, FRAME_HEADER_SIZE);
 
     chacha20poly1305_encrypt(&ctx,
-                              (uint8_t*)plaintext,
+                              padded,
                               frameOut + FRAME_HEADER_SIZE,
-                              (size_t)ptLen);
+                              (size_t)PAD_BLOCK);
 
     rfc7539_finish(&ctx,
                    (int64_t)FRAME_HEADER_SIZE,
-                   (int64_t)ptLen,
-                   frameOut + FRAME_HEADER_SIZE + ptLen);
+                   (int64_t)PAD_BLOCK,
+                   frameOut + FRAME_HEADER_SIZE + PAD_BLOCK);
 
-    *frameLen = FRAME_HEADER_SIZE + ptLen + FRAME_TAG_SIZE;
+    *frameLen = FRAME_HEADER_SIZE + PAD_BLOCK + FRAME_TAG_SIZE;
     return true;
 }
 
@@ -1065,9 +1079,11 @@ TinyConsole::AeadDecrypt(const byte* frame, int frameLen,
                           byte* plaintext, int* ptLen)
 {
     int ctLen = frameLen - FRAME_TAG_SIZE;
-    if (ctLen <= 0) {
+    // With fixed-size padding the ciphertext is always one block
+    if (ctLen != PAD_BLOCK) {
         OSYSLOG1((osyslogERROR,
-                  "TinyConsole::AeadDecrypt bad frameLen %d", frameLen));
+                  "TinyConsole::AeadDecrypt bad block size %d (expected %d)",
+                  ctLen, PAD_BLOCK));
         return false;
     }
 
@@ -1075,35 +1091,50 @@ TinyConsole::AeadDecrypt(const byte* frame, int frameLen,
 
     chacha20poly1305_ctx ctx;
     rfc7539_init(&ctx, (uint8_t*)CHACHA_KEY, sessionNonce);
-	
-	uint8_t frame_header_bytes[FRAME_HEADER_SIZE];
-	frame_header_bytes[0] = (uint8_t)( ctLen & 0xFF);
-	frame_header_bytes[1] = (uint8_t)((ctLen >> 8) & 0xFF);
-	
-	rfc7539_auth(&ctx, frame_header_bytes, FRAME_HEADER_SIZE);
-	
+
+    uint8_t frame_header_bytes[FRAME_HEADER_SIZE];
+    frame_header_bytes[0] = (uint8_t)( ctLen       & 0xFF);   // == PAD_BLOCK
+    frame_header_bytes[1] = (uint8_t)((ctLen >> 8) & 0xFF);
+
+    rfc7539_auth(&ctx, frame_header_bytes, FRAME_HEADER_SIZE);
+
+    // Decrypt the whole padded block (in place: frame == plaintext)
     chacha20poly1305_decrypt(&ctx,
                               (uint8_t*)frame,
                               plaintext,
-                              (size_t)ctLen);
+                              (size_t)PAD_BLOCK);
 
     uint8_t expectedTag[FRAME_TAG_SIZE];
-    
     rfc7539_finish(&ctx,
                    (int64_t)FRAME_HEADER_SIZE,
-                   (int64_t)ctLen,
+                   (int64_t)PAD_BLOCK,
                    expectedTag);
 
     if (!poly1305_verify(expectedTag,
-                         (const unsigned char*)(frame + ctLen))) {
+                         (const unsigned char*)(frame + PAD_BLOCK))) {
         OSYSLOG1((osyslogERROR,
                   "TinyConsole: Poly1305 tag mismatch - dropping frame"));
-        memset(plaintext, 0, ctLen);
+        memset(plaintext, 0, PAD_BLOCK);
         *ptLen = 0;
         return false;
     }
 
-    *ptLen = ctLen;
+    // Recover the **real** length from the inner prefix and remove padding
+    int realLen = (int)plaintext[0] | ((int)plaintext[1] << 8);
+    if (realLen < 0 || realLen > (PAD_BLOCK - PAD_LEN_PREFIX)) {
+        OSYSLOG1((osyslogERROR,
+                  "TinyConsole: bad inner length %d - dropping frame",
+                  realLen));
+        memset(plaintext, 0, PAD_BLOCK);
+        *ptLen = 0;
+        return false;
+    }
+
+    // Shift payload to the front so functions see a clean plaintext buffer.
+    memmove(plaintext, plaintext + PAD_LEN_PREFIX, realLen);
+    plaintext[realLen] = '\0';   // safe: realLen <= 254 << CONSOLE_BUFSIZE
+
+    *ptLen = realLen;
     return true;
 }
 
@@ -1189,7 +1220,7 @@ TinyConsole::VerifyClientHandshake(const uint8_t* clientSig)
 }
 
 // ================================================================
-//  Motion helpers
+//  Motion functions
 // ================================================================
 
 void
