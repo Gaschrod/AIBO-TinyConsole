@@ -119,7 +119,7 @@ class AiboLink:
         link.close()               # force-closes without QUIT
     """
 
-    def init(self, robot_ip: str, port: int, key: bytes,
+    def __init__(self, robot_ip: str, port: int, key: bytes,
                  robot_pubkey: bytes, client_seed: bytes) -> None:
         if len(key) != 32:
             raise ValueError(f"ChaCha20 key must be 32 bytes, got {len(key)}")

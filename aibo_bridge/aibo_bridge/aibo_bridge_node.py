@@ -71,8 +71,8 @@ MOTION_COMMANDS = {"FORWARD", "BACK", "STOP"}
 
 class AiboBridgeNode(Node):
 
-    def init(self) -> None:
-        super().init("aibo_bridge")
+    def __init__(self) -> None:
+        super().__init__("aibo_bridge")
 
         # ----------------------------------------------------------
         # Parameters
@@ -192,7 +192,7 @@ class AiboBridgeNode(Node):
         )
 
         # ----------------------------------------------------------
-        # Initial connection attempt
+        # __init__ial connection attempt
         # ----------------------------------------------------------
         self.try_connect()
 
@@ -359,7 +359,7 @@ class AiboBridgeNode(Node):
 # ================================================================
 
 def main(args=None) -> None:
-    rclpy.init(args=args)
+    rclpy.__init__(args=args)
     node = AiboBridgeNode()
     try:
         rclpy.spin(node)

@@ -21,7 +21,7 @@ When the key is released, it stops.
 If no key press arrives within `key_timeout` seconds, publish a zero Twist to stop the robot.
 This is done to avoid the robot continuing to move in case of a crash.
 
-Trade-off: `key_timeout` must be larger than system's initial
+Trade-off: `key_timeout` must be larger than system's __init__ial
 auto-repeat delay (0.25-0.5 s) or there will be a brief stop/start
 stutter right after pressing. 
 
@@ -55,8 +55,8 @@ Motion is hold-to-move: release the arrow and the robot stops.
 
 class AiboTeleopKey(Node):
 
-    def init(self) -> None:
-        super().init("aibo_teleop_key")
+    def __init__(self) -> None:
+        super().__init__("aibo_teleop_key")
 
         # Topics (parameters that can match a remapped bridge)
         self.declare_parameter("command_topic", "/aibo_bridge/command")
@@ -169,7 +169,7 @@ class AiboTeleopKey(Node):
 
 
 def main(args=None) -> None:
-    rclpy.init(args=args)
+    rclpy.__init__(args=args)
     node = AiboTeleopKey()
 
     # Spin in the background so parameters/logging behave normally while the
