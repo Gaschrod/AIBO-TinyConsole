@@ -169,7 +169,7 @@ class AiboTeleopKey(Node):
 
 
 def main(args=None) -> None:
-    rclpy.__init__(args=args)
+    rclpy.init(args=args)
     node = AiboTeleopKey()
 
     # Spin in the background so parameters/logging behave normally while the

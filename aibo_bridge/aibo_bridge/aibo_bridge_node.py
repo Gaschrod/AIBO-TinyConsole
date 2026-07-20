@@ -359,7 +359,7 @@ class AiboBridgeNode(Node):
 # ================================================================
 
 def main(args=None) -> None:
-    rclpy.__init__(args=args)
+    rclpy.init(args=args)
     node = AiboBridgeNode()
     try:
         rclpy.spin(node)
