@@ -3,8 +3,7 @@ aibo_link.py
 Low-level encrypted TCP link to the AIBO ERS-7 TinyConsole.
 
 Extracted from chacha20_console_client.py.  The wire protocol, crypto
-primitives, and nonce arithmetic are unchanged — only the structure changes
-from a standalone script to a reusable class.
+primitives, and nonce arithmetic are unchange.
 
 Protocol recap (half-duplex, client always sends first):
   1. TCP connect
@@ -49,53 +48,62 @@ HANDSHAKE_CONTEXT  = b"AIBO-TinyConsole-Handshake"
 FRAME_TAG_SIZE = 16
 
 
-# ------------------------------------------------------------------
+# ---------------------------------------------------------------
+#  Helpers
+# ---------------------------------------------------------------
 
-def _recv_exact(sock: socket.socket, n: int) -> bytes:
-    """Blocking read of exactly n bytes."""
+def recv_exact(sock: socket.socket, n: int) -> bytes:
+    """Read exactly n bytes from sock, blocking until available."""
     buf = b""
     while len(buf) < n:
         chunk = sock.recv(n - len(buf))
         if not chunk:
-            raise ConnectionError("Connection closed by server")
+            raise ConnectionError("Connection closed by robot")
         buf += chunk
     return buf
 
 
-def _build_nonce(session_prefix: bytes, counter: int, is_server_tx: bool) -> bytes:
+def build_nonce(session_prefix: bytes, counter: int, is_robot_tx: bool) -> bytes:
     """
-    Build the 12-byte nonce for one AEAD message.
-      session_prefix  8-byte prefix (XOR of server + client contributions)
-      counter         per-direction uint32 counter, starts at 0 each session
-      is_server_tx    True for server→client direction (sets bit 31 of counter)
+    Reconstruct the 12-byte nonce for one message.
+      session_prefix : bytes [0..7] from the (verified) handshake
+      counter : uint32 shared message counter (LE in bytes [8..11])
+      is_robot_tx : bool indicating if this is a robot-to-client message
     """
     mc = counter
-    if is_server_tx:
-        mc |= 0x80000000   # Set high bit for server-to-client messages
-
+    if is_robot_tx:
+        mc |= 0x80000000   # Set high bit for robot-to-client messages
     return session_prefix + struct.pack("<I", mc)
 
 
-def _aead_encrypt(aead: ChaCha20Poly1305, nonce: bytes, plaintext: bytes) -> bytes:
-    """Return a complete wire frame: [2-byte LE length][ciphertext][16-byte tag]."""
-    header     = struct.pack("<H", len(plaintext))
-    ct_and_tag = aead.encrypt(nonce, plaintext, header)  # Header = additional authenticated data (AAD)
-    ct         = ct_and_tag[:-FRAME_TAG_SIZE]
-    tag        = ct_and_tag[-FRAME_TAG_SIZE:]
+def aead_encrypt(aead: ChaCha20Poly1305,
+                 nonce: bytes,
+                 plaintext: bytes) -> bytes:
+    """
+    Encrypt plaintext and return a complete wire frame:
+      [2-byte LE ciphertext length][ciphertext][16-byte Poly1305 tag]
+    """
+    header = struct.pack("<H", len(plaintext))
+
+    ct_and_tag = aead.encrypt(nonce, plaintext, header)   # Header = additional authenticated data (AAD)
+    ct  = ct_and_tag[:-FRAME_TAG_SIZE]
+    tag = ct_and_tag[-FRAME_TAG_SIZE:]
     return header + ct + tag
 
 
-def _aead_decrypt(aead: ChaCha20Poly1305, nonce: bytes, sock: socket.socket) -> bytes:
+def aead_decrypt(aead: ChaCha20Poly1305,
+                 nonce: bytes,
+                 sock: socket.socket) -> bytes:
     """
-    Read one AEAD frame from sock, authenticate and decrypt it.
-    Raises ValueError on tag mismatch, ConnectionError on EOF.
+    Read one AEAD frame from sock, verify its tag, and return the plaintext.
+    Raises ValueError on authentication failure.
     """
-    header = _recv_exact(sock, 2)
+    header = recv_exact(sock, 2)
     ct_len = struct.unpack("<H", header)[0]
 
-    body   = _recv_exact(sock, ct_len + FRAME_TAG_SIZE)
-    ct     = body[:ct_len]
-    tag    = body[ct_len:]
+    body = recv_exact(sock, ct_len + FRAME_TAG_SIZE)
+    ct  = body[:ct_len]
+    tag = body[ct_len:]
 
     try:
         return aead.decrypt(nonce, ct + tag, header)
@@ -172,10 +180,10 @@ class AiboLink:
         # Read banner line (terminated by \n)
         banner = b""
         while b"\n" not in banner:
-            banner += _recv_exact(s, 1)
+            banner += recv_exact(s, 1)
 
         # Read 12-byte server nonce (plaintext)
-        raw_nonce = _recv_exact(s, NONCE_SIZE)
+        raw_nonce = recv_exact(s, NONCE_SIZE)
 
         # Send 12 random bytes as our nonce contribution
         client_nonce = os.urandom(NONCE_SIZE)
@@ -184,7 +192,7 @@ class AiboLink:
         # --- Verify the robot's identity before trusting anything else ---
         # The signature covers exactly (context || raw_nonce || client_nonce),
         # matching SignHandshake() in TinyConsole.cc byte-for-byte.
-        sig = _recv_exact(s, HANDSHAKE_SIG_SIZE)
+        sig = recv_exact(s, HANDSHAKE_SIG_SIZE)
         transcript = HANDSHAKE_CONTEXT + raw_nonce + client_nonce
         try:
             self.robot_pubkey_obj.verify(sig, transcript)
@@ -239,17 +247,17 @@ class AiboLink:
         plaintext = (cmd.rstrip("\r\n") + "\n").encode("utf-8")
 
         # --- Encrypt and send ---
-        tx_nonce = _build_nonce(self.session_prefix, self.tx_counter,
-                                 is_server_tx=False)
+        tx_nonce = build_nonce(self.session_prefix, self.tx_counter,
+                                 is_robot_tx=False)
         self.tx_counter += 1
-        frame = _aead_encrypt(self.aead, tx_nonce, plaintext)
+        frame = aead_encrypt(self.aead, tx_nonce, plaintext)
         self.sock.sendall(frame)
 
         # --- Receive and decrypt ---
-        rx_nonce = _build_nonce(self.session_prefix, self.rx_counter,
-                                 is_server_tx=True)
+        rx_nonce = build_nonce(self.session_prefix, self.rx_counter,
+                                 is_robot_tx=True)
         self.rx_counter += 1
-        response = _aead_decrypt(self.aead, rx_nonce, self.sock)
+        response = aead_decrypt(self.aead, rx_nonce, self.sock)
         return response.decode("utf-8", errors="replace").strip()
 
     # ----------------------------------------------------------------
