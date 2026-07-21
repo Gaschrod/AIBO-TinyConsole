@@ -25,12 +25,6 @@
 #include "TinyConsole.h"
 
 // ================================================================
-//  Static member definitions
-// ================================================================
-
-uint32_t TinyConsole::sessionId = 0;
-
-// ================================================================
 // Joint locators (taken from ERS-7 Model Information official Sony's documentation)
 //
 // This can be very confusing but the official documentation uses a view from the side
@@ -304,6 +298,8 @@ TinyConsole::TinyConsole()
       pendingCmd(MCMD_NONE),
       motionCounter(0),
       walkForward(true)
+      sessionCounter(0),
+      replayGuardOK(false)
 {
     conn.state = CONNECTION_CLOSED;
     memset(sessionNonce,    0, sizeof(sessionNonce));
@@ -378,6 +374,13 @@ TinyConsole::DoStart(const OSystemEvent& event)
 
     ENABLE_ALL_SUBJECT;
     ASSERT_READY_TO_ALL_OBSERVER;
+
+    if (!ReplayCounter_Load(&sessionCounter)) {
+        OSYSLOG1((osyslogERROR, "%s", "replay counter corrupt - refusing to serve"));
+        replayGuardOK = false;
+        return oSUCCESS;                 // stay up but never Listen() => fail closed
+    }
+    replayGuardOK = true;
 
     return Listen();
 }
@@ -604,6 +607,21 @@ TinyConsole::ListenCont(ANTENVMSG msg)
         Close();
         return;
     }
+
+    if (!replayGuardOK) { 
+        Close(); 
+        return; // guard
+    }
+
+    uint64_t next = sessionCounter + 1;
+    if (!ReplayCounter_Persist(next)) {               // MS write-protect switch on?
+        OSYSLOG1((osyslogERROR, "%s", "counter persist failed - aborting"));
+        Close();
+        return;                                        // fail closed
+    }
+    sessionCounter = next;
+    uint32_t sid = (uint32_t)(sessionCounter & 0xFFFFFFFFu);   // low word into nonce
+
 
     conn.state   = CONNECTION_CONNECTED;
     pendingClose= false;

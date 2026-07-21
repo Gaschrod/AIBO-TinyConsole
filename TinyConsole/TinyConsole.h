@@ -51,6 +51,7 @@
 extern "C"{
 	#include "tweetnacl.h"      // crypto_sign / crypto_sign_open (Ed25519)
 }
+#include "replay_counter.h"
 #include "def.h"
 #include "entry.h"
 
@@ -281,7 +282,8 @@ private:
     ReceivePhase recvPhase;
     uint16_t pendingFrameLen;
 
-    static uint32_t sessionId;
+    uint64_t      sessionCounter; // persistent, reboot-stable
+    bool          replayGuardOK;  // false -> counter unreadable/corrupt -> fail closed
 
     // --- Motion ---
     OPrimitiveID  jointID[NUM_JOINTS];

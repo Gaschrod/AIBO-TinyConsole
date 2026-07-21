@@ -33,7 +33,7 @@ TinyConsoleStub.cc: stub.cfg
 
 CRYPTO_OBJS = rfc7539.o chacha20poly1305.o poly1305-donna.o chacha_merged.o tweetnacl.o
 
-tinyConsole.bin: TinyConsoleStub.o TinyConsole.o $(CRYPTO_OBJS) tinyConsole.ocf
+tinyConsole.bin: TinyConsoleStub.o TinyConsole.o replay_counter.o $(CRYPTO_OBJS) tinyConsole.ocf
 	$(MKBIN) $(MKBINFLAGS) -o $@ $^ $(LIBS)
 	$(STRIP) $@
 

@@ -40,6 +40,7 @@ from cryptography.hazmat.primitives.ciphers.aead import ChaCha20Poly1305
 from cryptography.hazmat.primitives.asymmetric.ed25519 import (
     Ed25519PublicKey, Ed25519PrivateKey,
 )
+from replay_watermark import check_and_update, extract_counter
 
 NONCE_SIZE     = 12
 HANDSHAKE_SIG_SIZE = 64
@@ -171,6 +172,7 @@ class AiboLink:
         self.session_prefix: Optional[bytes]          = None
         self.tx_counter = 0
         self.rx_counter = 0
+        self.robot_pubkey_hex = robot_pubkey.hex()
 
     # ----------------------------------------------------------------
 
@@ -224,6 +226,13 @@ class AiboLink:
                 "robot_pubkey is stale after the robot was re-flashed with "
                 "a new identity. Refusing to proceed."
             )
+
+        # Now ensures that the robot's session counter value is strictly increasing, to prevent replay/rollback attacks.
+        try:
+            check_and_update(self.robot_pubkey_hex, extract_counter(raw_nonce))
+        except ConnectionError:
+            s.close()
+            raise
 
         # --- Prove OUR identity to the robot (mutual auth) ---
         # Sign the identical transcript the robot just signed. The robot holds
