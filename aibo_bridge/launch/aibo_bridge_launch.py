@@ -21,13 +21,19 @@ Precedence note:
   ROS 2 applies the list in order, so the dict overrides the YAML. The dict
   below deliberately contains ONLY the non-secret params, so the key material
   from the YAML is never clobbered.
+
+Network isolation:
+Done in two places:
+    - Via SetEnvironmentVariable, for everything this file spawns
+    - Inside the node main() (enforce_localhost_discovery), which also
+      covers `ros2 run aibo_bridge aibo_bridge_node` with no launch file.
 """
 
 import os
 
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument
+from launch.actions import DeclareLaunchArgument, SetEnvironmentVariable
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
 
@@ -39,6 +45,13 @@ def generate_launch_description() -> LaunchDescription:
         "config",
         "aibo_keys.yaml",
     )
+
+    # ----------------------------------------------------------------
+    # Lock DDS discovery to the local host.
+    # ----------------------------------------------------------------
+    enforce_local_discovery = [
+        SetEnvironmentVariable("ROS_AUTOMATIC_DISCOVERY_RANGE", "LOCALHOST"),
+    ]
 
     # ----------------------------------------------------------------
     # Overrideable arguments (non-secret only)
@@ -99,4 +112,4 @@ def generate_launch_description() -> LaunchDescription:
         ],
     )
 
-    return LaunchDescription(args + [bridge_node])
+    return LaunchDescription(enforce_local_discovery + args + [bridge_node])

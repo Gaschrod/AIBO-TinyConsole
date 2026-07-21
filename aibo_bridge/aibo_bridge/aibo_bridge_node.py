@@ -37,6 +37,14 @@ Published
   cmd_vel_deadband  (double)   |linear.x| threshold m/s  [0.05]
   reconnect_period  (double)   seconds between reconnect attempts [5.0]
 
+=== Network isolation (self-contained security) ===
+
+With ROS 2's default DDS discovery, any host sharing the ROS domain on that same Wi-Fi
+segment could publish to /cmd_vel or ~/command and have the bridge encrypt and forward it.
+
+To keep it self-contained (no actions are required before launching it), the node
+limits DDS discovery to the local host only, before anything starts
+
 === Notes ===
 
 TinyConsole is half-duplex: the client always sends first, and every
@@ -52,6 +60,8 @@ The node uses ROS 2's default SingleThreadedExecutor.  The lock is
 kept for correctness if someone switches to MultiThreadedExecutor.
 """
 
+import os
+import sys
 import threading
 from typing import Optional
 
@@ -65,8 +75,35 @@ from aibo_bridge.aibo_link import AiboLink
 # Commands that TinyConsole accepts (upper-case, used for validation).
 VALID_COMMANDS = {"GET_UP", "REST", "FORWARD", "BACK", "STOP", "HELP", "INFO", "PING", "QUIT"}
 
-# Motion commands that affect the AIBO's movement state (used for debouncing).
-MOTION_COMMANDS = {"FORWARD", "BACK", "STOP"}
+# --------------------------------------------------------------------------
+# DDS discovery lock-down.
+# --------------------------------------------------------------------------
+_ENFORCED_DISCOVERY_ENV = {
+    "ROS_AUTOMATIC_DISCOVERY_RANGE": "LOCALHOST",
+}
+
+
+def enforce_localhost_discovery() -> None:
+    """
+    Constrain DDS discovery to the local host *before* the starts
+
+    Self-contained:
+      - no need to `export ROS_LOCALHOST_ONLY=1` manually
+      - applies identically whether the node is started with `ros2 run`
+        or `ros2 launch` (both call main())
+      - if tries to widen discovery, override it and logs it
+
+    Must run before rclpy.init()!! calling it afterwards has no effect
+    """
+    for key, value in _ENFORCED_DISCOVERY_ENV.items():
+        current = os.environ.get(key)
+        if current not in (None, "", value):
+            print(
+                f"[aibo_bridge] Overriding {key}={current!r} -> {value!r} "
+                f"to keep AIBO discovery local-only",
+                file=sys.stderr,
+            )
+        os.environ[key] = value
 
 
 class AiboBridgeNode(Node):
@@ -92,6 +129,14 @@ class AiboBridgeNode(Node):
         client_seed_hex = self.get_parameter("client_ed25519_seed").value
         self.deadband = float(self.get_parameter("cmd_vel_deadband").value)
         reconnect_period = float(self.get_parameter("reconnect_period").value)
+
+        # Confirm, for the operator and the record, that discovery is local-only.
+        self.get_logger().info(
+            "DDS discovery constrained to local host "
+            f"(ROS_AUTOMATIC_DISCOVERY_RANGE="
+            f"{os.environ.get('ROS_AUTOMATIC_DISCOVERY_RANGE')}, "
+            f"ROS_LOCALHOST_ONLY={os.environ.get('ROS_LOCALHOST_ONLY')})"
+        )
 
         # Parse and validate the key
         try:
@@ -312,7 +357,7 @@ class AiboBridgeNode(Node):
         desired state changes, so a held joystick does not spam frames.
         """
         self.last_cmd_vel_time = self.get_clock().now()
-        
+
         lx = msg.linear.x
 
         if lx > self.deadband:
@@ -359,6 +404,10 @@ class AiboBridgeNode(Node):
 # ================================================================
 
 def main(args=None) -> None:
+    # Lock DDS discovery to the local host BEFORE the middleware starts.
+    # Must precede rclpy.init(); afterwards it has no effect.
+    enforce_localhost_discovery()
+
     rclpy.init(args=args)
     node = AiboBridgeNode()
     try:
@@ -370,4 +419,5 @@ def main(args=None) -> None:
         rclpy.shutdown()
 
 
-main()
+if __name__ == "__main__":
+    main()
