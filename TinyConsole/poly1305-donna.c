@@ -1,13 +1,7 @@
 #include "poly1305-donna.h"
 
-#if defined(POLY1305_8BIT)
-#include "poly1305-donna-8.h"
-#elif defined(POLY1305_16BIT)
-#include "poly1305-donna-16.h"
-#elif defined(POLY1305_32BIT)
+#if defined(POLY1305_32BIT)
 #include "poly1305-donna-32.h"
-#elif defined(POLY1305_64BIT)
-#include "poly1305-donna-64.h"
 #else
 
 /* auto detect between 32bit / 64bit */
