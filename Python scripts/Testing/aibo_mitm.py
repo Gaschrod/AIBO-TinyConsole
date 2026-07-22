@@ -374,7 +374,7 @@ def main():
                 print(f"[+] connected to robot {rip}:{rport}")
             except OSError as e:
                 print(f"[!] cannot reach robot: {e}")
-                _emit_rst(client_sock)
+                emit_rst(client_sock)
                 if args.once:
                     break
                 continue
