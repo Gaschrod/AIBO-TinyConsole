@@ -39,9 +39,11 @@ def generate_launch_description() -> LaunchDescription:
 
     args = [
         DeclareLaunchArgument(
-            "joy_dev",
-            default_value="/dev/input/js0",
-            description="Joystick device node for the PS4 controller",
+            # Select the pad by name
+            # Get it with:  cat /sys/class/input/js0/device/name
+            "joy_device_name",
+            default_value="Sony Interactive Entertainment Wireless Controller",
+            description="Exact controller name reported by the OS (see cat /sys/class/input/js0/device/name)",
         ),
         DeclareLaunchArgument(
             "joy_deadzone",
@@ -78,8 +80,8 @@ def generate_launch_description() -> LaunchDescription:
         output="screen",
         parameters=[
             {
-                "device_name": "",  # empty = pick the first pad; use device_id/js path if needed
-                "dev": LaunchConfiguration("joy_dev"),
+                # Pin to the controller by name -> stable across reboots/replugs
+                "device_name": LaunchConfiguration("joy_device_name"),
                 "deadzone": LaunchConfiguration("joy_deadzone"),
                 "autorepeat_rate": 20.0,  # keep Joy flowing even when the pad is idle
             }

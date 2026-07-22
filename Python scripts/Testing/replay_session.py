@@ -82,7 +82,7 @@ def main():
         # Replay the OLD client nonce + OLD client signature.
         s.sendall(rec_client_nonce)
         print(f"[*] replayed old client_nonce: {rec_client_nonce.hex()}")
-        _new_robot_sig = recv_exact(s, SIG_SIZE)
+        new_robot_sig = recv_exact(s, SIG_SIZE)
         s.sendall(rec_client_sig)
         print(f"[*] replayed old client_sig:   {rec_client_sig.hex()[:32]}...")
 
