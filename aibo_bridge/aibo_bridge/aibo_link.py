@@ -40,7 +40,7 @@ from cryptography.hazmat.primitives.ciphers.aead import ChaCha20Poly1305
 from cryptography.hazmat.primitives.asymmetric.ed25519 import (
     Ed25519PublicKey, Ed25519PrivateKey,
 )
-from replay_watermark import check_and_update, extract_counter
+from aibo_bridge.replay_watermark import check_and_update, extract_counter
 
 NONCE_SIZE     = 12
 HANDSHAKE_SIG_SIZE = 64
