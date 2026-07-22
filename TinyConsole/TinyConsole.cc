@@ -297,7 +297,7 @@ TinyConsole::TinyConsole()
       motionState(MSTATE_IDLE),
       pendingCmd(MCMD_NONE),
       motionCounter(0),
-      walkForward(true)
+      walkForward(true),
       sessionCounter(0),
       replayGuardOK(false)
 {
@@ -629,10 +629,9 @@ TinyConsole::ListenCont(ANTENVMSG msg)
     recvPhase   = RX_CLIENT_NONCE;
 
     // Build 12-byte session nonce:
-    //   [0..3]  session ID (LE) monotone per boot, resets on reboot
+    //   [0..3]  session counter (LE) which is incremented for each new TCP session
     //   [4..7]  client IPv4   (LE)
     //   [8..11] per-message counter, written by AdvanceNonce()
-    uint32_t sid  = (uint32_t)sessionId++;
     uint32_t addr = listenMsg->fAddress.Address();
 
     sessionNonce[0] = (uint8_t)( sid         & 0xFF);
