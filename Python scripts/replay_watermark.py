@@ -34,7 +34,7 @@ def extract_counter(raw_nonce: bytes) -> int:
     return int.from_bytes(raw_nonce[0:4], "little")
 
 
-def _load(path: str) -> dict:
+def load(path: str) -> dict:
     try:
         with open(path, "r") as f:
             return json.load(f)
@@ -42,7 +42,7 @@ def _load(path: str) -> dict:
         return {}
 
 
-def _atomic_save(path: str, data: dict) -> None:
+def atomic_save(path: str, data: dict) -> None:
     directory = os.path.dirname(path)
     os.makedirs(directory, exist_ok=True)
     fd, tmp = tempfile.mkstemp(dir=directory)
@@ -71,7 +71,7 @@ def check_and_update(robot_pubkey_hex: str,
     Onsuccess, persists the new higher value.
     """
     store_path = path or _DEFAULT_PATH
-    store = _load(store_path)
+    store = load(store_path)
     key = robot_pubkey_hex.lower()
     last = store.get(key, -1)
 
@@ -87,4 +87,4 @@ def check_and_update(robot_pubkey_hex: str,
         )
 
     store[key] = server_counter
-    _atomic_save(store_path, store)
+    atomic_save(store_path, store)
