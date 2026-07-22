@@ -350,36 +350,46 @@ def main():
             print(f"[!] IP_TRANSPARENT failed ({e}); run as root.", file=sys.stderr)
     lsock.bind((lhost, int(lport)))
     lsock.listen(8)
-    print(f"[*] aibo_mitm listening on {args.listen}  mode={args.mode}  "
-          f"outdir={args.outdir}")
+    os.makedirs(args.outdir, exist_ok=True)
+    print(f"[*] aibo_mitm listening on {args.listen}  mode={args.mode}")
+    print(f"[*] captures -> {os.path.abspath(args.outdir)}")
     if not args.transparent:
         print(f"[*] forwarding to robot at {args.robot}")
+    print("[*] waiting for a connection... "
+          "(if nothing arrives, traffic is NOT being redirected here -- "
+          "check `nft list ruleset` counters and routing, not bridging)")
 
-    while True:
-        client_sock, peer = lsock.accept()
-        print(f"[+] client connected from {peer}")
-        try:
-            if args.transparent:
-                rip, rport = original_dst(client_sock)
-            else:
-                rip, rport = args.robot.rsplit(":", 1)
-                rport = int(rport)
-            robot_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            robot_sock.connect((rip, rport))
-            print(f"[+] connected to robot {rip}:{rport}")
-        except OSError as e:
-            print(f"[!] cannot reach robot: {e}")
-            emit_rst(client_sock)
+    try:
+        while True:
+            client_sock, peer = lsock.accept()
+            print(f"[+] client connected from {peer}")
+            try:
+                if args.transparent:
+                    rip, rport = original_dst(client_sock)
+                else:
+                    rip, rport = args.robot.rsplit(":", 1)
+                    rport = int(rport)
+                robot_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                robot_sock.connect((rip, rport))
+                print(f"[+] connected to robot {rip}:{rport}")
+            except OSError as e:
+                print(f"[!] cannot reach robot: {e}")
+                _emit_rst(client_sock)
+                if args.once:
+                    break
+                continue
+
+            log = SessionLog(args.outdir)
+            print(f"[*] logging to {log.path}")
+            Proxy(args, client_sock, robot_sock, log).run()
+            log.close()
+            print(f"[-] session finished ({log.frames_saved} frames relayed)")
             if args.once:
                 break
-            continue
+    except KeyboardInterrupt:
+        print("\n[*] interrupted; shutting down cleanly.")
+    finally:
+        lsock.close()
 
-        log = SessionLog(args.outdir)
-        print(f"[*] logging to {log.path}")
-        Proxy(args, client_sock, robot_sock, log).run()
-        log.close()
-        print(f"[-] session finished ({log.frames_saved} frames relayed)")
-        if args.once:
-            break
 
 main()
