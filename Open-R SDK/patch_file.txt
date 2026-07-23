@@ -1,1 +1,0 @@
-sudo apt-get install flex gettext patch bison texinfo make g++
