@@ -53,21 +53,17 @@ PAD_LEN_PREFIX = 2     # inner uint16 LE real length
 HANDSHAKE_CONTEXT  = b"AIBO-TinyConsole-Handshake"
 
 CHACHA_KEY = bytes([
-    0x40, 0x17, 0x90, 0xF9, 0x5E, 0x5F, 0x57, 0x20,
-    0xE7, 0x61, 0x31, 0x73, 0xBF, 0x71, 0x4A, 0xD0,
-    0x92, 0x01, 0xFC, 0x99, 0x5B, 0xAE, 0x18, 0x8F,
-    0xFF, 0x3C, 0x28, 0x49, 0xCA, 0x2C, 0x8B, 0x57,
 ])
 
 # PLACEHOLDER, need to be filled with the public key of the robot.
 # Left empty, this raises an error.
-ROBOT_PUBKEY_HEX = "a752af2183bc58c22f0d3e530c669a95f4e208f71c5c6ec901f6a23b9a233933"
+ROBOT_PUBKEY_HEX = ""
 
 # The client's private Ed25519 key (32-byte hex). !SECRET!
 # The corresponding public key must be written in ConsoleConfig.h (robot side)
 # and is used to verify the client's identity during the
 # handshake. Left empty, this raises an error (fail closed).
-CLIENT_PRIVATE_KEY_HEX = "42d7fbf0fea7d884e6f3fcac89a5ec93e92d1c53e5ac9c4a14ebd36ff305ca72"
+CLIENT_PRIVATE_KEY_HEX = ""
 
 # ---------------------------------------------------------------
 #  Functions
