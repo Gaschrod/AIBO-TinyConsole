@@ -1,7 +1,20 @@
 //
 // TinyConsole.cc
 // Minimal OPEN-R TCP console with application-layer XOR.
-
+//
+// ANT TCP lifecycle:
+//  1. DoStart()     -> Listen()         allocate endpoint, post ListenMsg
+//  2. ListenCont()  <- scheduler        client connected
+//                   -> send BANNER (plain text, no XOR)
+//  3. SendCont()    <- scheduler        send complete
+//                   -> Receive()        arm for next incoming data
+//  4. ReceiveCont() <- scheduler        data arrived
+//                   -> XOR decode, dispatch, XOR encode reply, Send()
+//  5. SendCont()    <- scheduler        reply sent
+//                   -> Receive() again, or Close() if QUIT was received
+//  6. CloseCont()   <- scheduler        connection closed
+//                   -> Listen() again   wait for next client
+//
 
 #include <string.h>
 #include <ctype.h>
@@ -15,9 +28,9 @@
 //  Constructor
 // ================================================================
 TinyConsole::TinyConsole()
-    : xorTxOffset(0), xorRxOffset(0), pendingClose(false)
+    : xorTxOffset_(0), xorRxOffset_(0), pendingClose_(false)
 {
-    conn.state = CONNECTION_CLOSED;
+    conn_.state = CONNECTION_CLOSED;
 }
 
 // ================================================================
@@ -28,6 +41,10 @@ OStatus
 TinyConsole::DoInit(const OSystemEvent& event)
 {
     OSYSDEBUG(("TinyConsole::DoInit()\n"));
+    NEW_ALL_SUBJECT_AND_OBSERVER;
+    REGISTER_ALL_ENTRY;
+    SET_ALL_READY_AND_NOTIFY_ENTRY;
+    
     return oSUCCESS;
 }
 
@@ -36,33 +53,37 @@ TinyConsole::DoStart(const OSystemEvent& event)
 {
     OSYSDEBUG(("TinyConsole::DoStart()\n"));
 
-    ipstackRef = antStackRef("IPStack");
+    ipstackRef_ = antStackRef("IPStack");
 
     // --- Allocate shared send buffer (ANT requires shared memory) ---
     antEnvCreateSharedBufferMsg sendBufMsg(CONSOLE_BUFSIZE);
-    sendBufMsg.Call(ipstackRef, sizeof(sendBufMsg));
+    sendBufMsg.Call(ipstackRef_, sizeof(sendBufMsg));
     if (sendBufMsg.error != ANT_SUCCESS) {
         OSYSLOG1((osyslogERROR, "TinyConsole: can't alloc send buffer %d",
                   sendBufMsg.error));
         return oFAIL;
     }
-    conn.sendBuffer = sendBufMsg.buffer;
-    conn.sendBuffer.Map();
-    conn.sendData = (byte*)conn.sendBuffer.GetAddress();
+    conn_.sendBuffer = sendBufMsg.buffer;
+    conn_.sendBuffer.Map();
+    conn_.sendData = (byte*)conn_.sendBuffer.GetAddress();
 
     // --- Allocate shared receive buffer ---
     antEnvCreateSharedBufferMsg recvBufMsg(CONSOLE_BUFSIZE);
-    recvBufMsg.Call(ipstackRef, sizeof(recvBufMsg));
+    recvBufMsg.Call(ipstackRef_, sizeof(recvBufMsg));
     if (recvBufMsg.error != ANT_SUCCESS) {
         OSYSLOG1((osyslogERROR, "TinyConsole: can't alloc recv buffer %d",
                   recvBufMsg.error));
         return oFAIL;
     }
-    conn.recvBuffer = recvBufMsg.buffer;
-    conn.recvBuffer.Map();
-    conn.recvData = (byte*)conn.recvBuffer.GetAddress();
+    conn_.recvBuffer = recvBufMsg.buffer;
+    conn_.recvBuffer.Map();
+    conn_.recvData = (byte*)conn_.recvBuffer.GetAddress();
 
     OSYSPRINT(("TinyConsole: starting on port %d\n", CONSOLE_PORT));
+    
+    ENABLE_ALL_SUBJECT;
+    ASSERT_READY_TO_ALL_OBSERVER;
+    
     return Listen();
 }
 
@@ -70,6 +91,10 @@ OStatus
 TinyConsole::DoStop(const OSystemEvent& event)
 {
     OSYSDEBUG(("TinyConsole::DoStop()\n"));
+    
+    DISABLE_ALL_SUBJECT;
+    DEASSERT_READY_TO_ALL_OBSERVER;
+    
     return oSUCCESS;
 }
 
@@ -100,26 +125,26 @@ TinyConsole::ListenCont(ANTENVMSG msg)
         return;
     }
 
-    conn.state   = CONNECTION_CONNECTED;
-    pendingClose = false;
+    conn_.state   = CONNECTION_CONNECTED;
+    pendingClose_ = false;
 
     // Reset XOR stream offsets for this new session.
-    xorTxOffset = 0;
-    xorRxOffset = 0;
+    xorTxOffset_ = 0;
+    xorRxOffset_ = 0;
 
     // Send the plaintext banner — NOT XOR'd so client knows when XOR begins.
     const char* banner    = CONSOLE_BANNER;
     int         bannerLen = strlen(banner);
-    memcpy(conn.sendData, banner, bannerLen);
-    conn.sendSize = bannerLen;
+    memcpy(conn_.sendData, banner, bannerLen);
+    conn_.sendSize = bannerLen;
 
-    TCPEndpointSendMsg sendMsg(conn.endpoint,
-                               conn.sendData, conn.sendSize);
+    TCPEndpointSendMsg sendMsg(conn_.endpoint,
+                               conn_.sendData, conn_.sendSize);
     sendMsg.continuation = (void*)0;
-    sendMsg.Send(ipstackRef, myOID,
+    sendMsg.Send(ipstackRef_, myOID_,
                  Extra_Entry[entrySendCont], sizeof(sendMsg));
-    conn.state    = CONNECTION_SENDING;
-    conn.sendSize = 0;
+    conn_.state    = CONNECTION_SENDING;
+    conn_.sendSize = 0;
     // SendCont() will call Receive() once banner delivery is confirmed.
 }
 
@@ -138,10 +163,12 @@ TinyConsole::SendCont(ANTENVMSG msg)
         return;
     }
 
-    conn.state = CONNECTION_CONNECTED;
+    conn_.state = CONNECTION_CONNECTED;
 
-    if (pendingClose) {
-        pendingClose = false;
+    // Bug 3 fix: if QUIT was processed in the last ReceiveCont,
+    // close the connection now that BYE has been delivered.
+    if (pendingClose_) {
+        pendingClose_ = false;
         Close();
         return;
     }
@@ -171,16 +198,16 @@ TinyConsole::ReceiveCont(ANTENVMSG msg)
     }
 
     // Bug 2 fix: restore state to CONNECTED so Send() will accept the call.
-    conn.state = CONNECTION_CONNECTED;
+    conn_.state = CONNECTION_CONNECTED;
 
     int n = recvMsg->sizeMin;
-    conn.recvSize = n;
+    conn_.recvSize = n;
 
     // XOR decode incoming data.
-    XorBuffer(conn.recvData, n, xorRxOffset);
+    XorBuffer(conn_.recvData, n, xorRxOffset_);
 
     // Null-terminate for safe string ops.
-    if (n < CONSOLE_BUFSIZE) conn.recvData[n] = '\0';
+    if (n < CONSOLE_BUFSIZE) conn_.recvData[n] = '\0';
 
     // -------------------------------------------------------
     //  Command dispatch.
@@ -190,7 +217,7 @@ TinyConsole::ReceiveCont(ANTENVMSG msg)
     //  Work directly in recvData which is already in shared
     //  heap memory, stripping CR/LF in place.
     // -------------------------------------------------------
-    char* cmd    = (char*)conn.recvData;
+    char* cmd    = (char*)conn_.recvData;
     int   cmdLen = n;
 
     while (cmdLen > 0 &&
@@ -205,16 +232,16 @@ TinyConsole::ReceiveCont(ANTENVMSG msg)
         response = "PONG\n";
     } else if (!strncmp(cmd, "QUIT", 4)) {
         response  = "BYE\n";
-        pendingClose = true;   // Close() called from SendCont after BYE sent
+        pendingClose_ = true;   // Close() called from SendCont after BYE sent
     }
 
     // XOR encode the response and send.
     int respLen = strlen(response);
-    memcpy(conn.sendData, response, respLen);
-    XorBuffer(conn.sendData, respLen, xorTxOffset);
-    conn.sendSize = respLen;
+    memcpy(conn_.sendData, response, respLen);
+    XorBuffer(conn_.sendData, respLen, xorTxOffset_);
+    conn_.sendSize = respLen;
 
-    Send(conn.sendData, conn.sendSize);
+    Send(conn_.sendData, conn_.sendSize);
 }
 
 void
@@ -225,7 +252,7 @@ TinyConsole::CloseCont(ANTENVMSG msg)
 
     OSYSDEBUG(("TinyConsole::CloseCont()\n"));
 
-    conn.state = CONNECTION_CLOSED;
+    conn_.state = CONNECTION_CLOSED;
     Listen();  // immediately wait for next client
 }
 
@@ -238,25 +265,25 @@ TinyConsole::Listen()
 {
     OSYSDEBUG(("TinyConsole::Listen()\n"));
 
-    if (conn.state != CONNECTION_CLOSED) return oFAIL;
+    if (conn_.state != CONNECTION_CLOSED) return oFAIL;
 
     antEnvCreateEndpointMsg tcpCreateMsg(EndpointType_TCP,
                                          CONSOLE_BUFSIZE * 2);
-    tcpCreateMsg.Call(ipstackRef, sizeof(tcpCreateMsg));
+    tcpCreateMsg.Call(ipstackRef_, sizeof(tcpCreateMsg));
     if (tcpCreateMsg.error != ANT_SUCCESS) {
         OSYSLOG1((osyslogERROR, "TinyConsole::Listen endpoint FAIL %d",
                   tcpCreateMsg.error));
         return oFAIL;
     }
-    conn.endpoint = tcpCreateMsg.moduleRef;
+    conn_.endpoint = tcpCreateMsg.moduleRef;
 
-    TCPEndpointListenMsg listenMsg(conn.endpoint,
+    TCPEndpointListenMsg listenMsg(conn_.endpoint,
                                    IP_ADDR_ANY, CONSOLE_PORT);
     listenMsg.continuation = (void*)0;
-    listenMsg.Send(ipstackRef, myOID,
+    listenMsg.Send(ipstackRef_, myOID_,
                    Extra_Entry[entryListenCont], sizeof(listenMsg));
 
-    conn.state = CONNECTION_LISTENING;
+    conn_.state = CONNECTION_LISTENING;
     OSYSPRINT(("TinyConsole: listening on port %d\n", CONSOLE_PORT));
     return oSUCCESS;
 }
@@ -264,57 +291,57 @@ TinyConsole::Listen()
 OStatus
 TinyConsole::Send(const byte* data, int size)
 {
-    if (conn.state != CONNECTION_CONNECTED) {
+    if (conn_.state != CONNECTION_CONNECTED) {
         OSYSLOG1((osyslogERROR, "TinyConsole::Send called in wrong state %d",
-                  conn.state));
+                  conn_.state));
         return oFAIL;
     }
 
-    TCPEndpointSendMsg sendMsg(conn.endpoint,
-                               conn.sendData, size);
+    TCPEndpointSendMsg sendMsg(conn_.endpoint,
+                               conn_.sendData, size);
     sendMsg.continuation = (void*)0;
-    sendMsg.Send(ipstackRef, myOID,
+    sendMsg.Send(ipstackRef_, myOID_,
                  Extra_Entry[entrySendCont],
                  sizeof(TCPEndpointSendMsg));
 
-    conn.state    = CONNECTION_SENDING;
-    conn.sendSize = 0;
+    conn_.state    = CONNECTION_SENDING;
+    conn_.sendSize = 0;
     return oSUCCESS;
 }
 
 OStatus
 TinyConsole::Receive()
 {
-    if (conn.state != CONNECTION_CONNECTED) {
+    if (conn_.state != CONNECTION_CONNECTED) {
         OSYSLOG1((osyslogERROR, "TinyConsole::Receive called in wrong state %d",
-                  conn.state));
+                  conn_.state));
         return oFAIL;
     }
 
-    TCPEndpointReceiveMsg recvMsg(conn.endpoint,
-                                  conn.recvData,
+    TCPEndpointReceiveMsg recvMsg(conn_.endpoint,
+                                  conn_.recvData,
                                   1, CONSOLE_BUFSIZE);
     recvMsg.continuation = (void*)0;
-    recvMsg.Send(ipstackRef, myOID,
+    recvMsg.Send(ipstackRef_, myOID_,
                  Extra_Entry[entryReceiveCont], sizeof(recvMsg));
 
-    conn.state    = CONNECTION_RECEIVING;
-    conn.recvSize = 0;
+    conn_.state    = CONNECTION_RECEIVING;
+    conn_.recvSize = 0;
     return oSUCCESS;
 }
 
 OStatus
 TinyConsole::Close()
 {
-    if (conn.state == CONNECTION_CLOSED ||
-        conn.state == CONNECTION_CLOSING) return oFAIL;
+    if (conn_.state == CONNECTION_CLOSED ||
+        conn_.state == CONNECTION_CLOSING) return oFAIL;
 
-    TCPEndpointCloseMsg closeMsg(conn.endpoint);
+    TCPEndpointCloseMsg closeMsg(conn_.endpoint);
     closeMsg.continuation = (void*)0;
-    closeMsg.Send(ipstackRef, myOID,
+    closeMsg.Send(ipstackRef_, myOID_,
                   Extra_Entry[entryCloseCont], sizeof(closeMsg));
 
-    conn.state = CONNECTION_CLOSING;
+    conn_.state = CONNECTION_CLOSING;
     return oSUCCESS;
 }
 

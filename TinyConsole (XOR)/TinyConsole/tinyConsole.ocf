@@ -1,1 +1,2 @@
-object tinyFTPD 3072 16384 128 cache tlb user
+object tinyConsole 3072 16384 128 cache tlb user
+

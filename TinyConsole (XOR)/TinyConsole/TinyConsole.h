@@ -2,22 +2,23 @@
 // TinyConsole.h
 // Minimal OPEN-R TCP console with application-layer XOR.
 //
-// ANT TCP lifecycle:
-//  1. DoStart()     -> Listen()         allocate endpoint, post ListenMsg
-//  2. ListenCont()  <- scheduler        client connected
-//                   -> send BANNER (plain text, no XOR)
-//  3. SendCont()    <- scheduler        send complete
-//                   -> Receive()        arm for next incoming data
-//  4. ReceiveCont() <- scheduler        data arrived
-//                   -> XOR decode, dispatch, XOR encode reply, Send()
-//  5. SendCont()    <- scheduler        reply sent
-//                   -> Receive() again, or Close() if QUIT was received
-//  6. CloseCont()   <- scheduler        connection closed
-//                   -> Listen() again   wait for next client
+//   PC client                   AIBO (this object)
+//   ---------                   ------------------
+//   connect()        ------>    ListenCont()  -> send BANNER (plaintext)
+//   recv BANNER
+//   -- XOR session starts here on both sides --
+//   send XOR(cmd\n)  ------>    ReceiveCont() -> decode -> dispatch
+//                               Send()        -> encode response
+//   recv XOR(resp)   <------
+//   send XOR(QUIT\n) ------>    ReceiveCont() -> sets pendingClose_
+//                               Send() BYE
+//   recv XOR(BYE)    <------
+//                               SendCont()    -> Close()
+//                               CloseCont()   -> Listen() (next client)
 //
 
-#ifndef TinyConsole_h_DEFINED
-#define TinyConsole_h_DEFINED
+#ifndef _TinyConsole_h_DEFINED
+#define _TinyConsole_h_DEFINED
 
 #include <OPENR/OObject.h>
 #include <OPENR/OSubject.h>
@@ -25,6 +26,7 @@
 #include <ant.h>
 #include <EndpointTypes.h>
 #include <TCPEndpointMsg.h>
+#include <OPENR/core_macro.h>
 
 #include "TCPConnection.h"
 #include "ConsoleConfig.h"
@@ -60,12 +62,13 @@ private:
 
     static void XorBuffer(byte* buf, int len, int& offset);
 
-    antStackRef   ipstackRef;
-    TCPConnection conn;
+    antStackRef   ipstackRef_;
+    TCPConnection conn_;
 
-    int  xorTxOffset;
-    int  xorRxOffset;
-    bool pendingClose;  // set by QUIT handler, acted on in SendCont
+    int  xorTxOffset_;
+    int  xorRxOffset_;
+    bool pendingClose_;  // set by QUIT handler, acted on in SendCont
 };
 
-#endif // TinyConsole_h_DEFINED
+#endif // _TinyConsole_h_DEFINED
+

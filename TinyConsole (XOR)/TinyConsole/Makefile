@@ -36,4 +36,5 @@ install: tinyConsole.bin
 clean:
 	rm -f *.o *.bin *.elf *.snap.cc
 	rm -f TinyConsoleStub.h TinyConsoleStub.cc def.h entry.h
-	rm -f $(INSTALLDIR)/OPEN-R/MW/OBJS/TINYCONSOLE.BIN
+	rm -f $(INSTALLDIR)/OPEN-R/MW/OBJS/TINYCONS.BIN
+
