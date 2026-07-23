@@ -1,0 +1,528 @@
+#! /usr/bin/perl -w
+# 
+# rp-openr-stubgen2-pp
+# Stub generator preprocessor for Remote Processing OPEN-R
+# Copyright 2002 Sony Corporation
+#
+
+#
+# limitations/differences)
+#  - Macros with argument(s) are NOT supported.
+#  - Trigraphs are NOT supported.
+#  - Escape sequences are NOT supported.
+#  - The automatic concatenation of neighbouring strings are NOT supported.
+#  - Preprocessor command '#line' is NOT supported.
+#  - There are no pre-defined macros like: __FILE__, __LINE__, and etc.
+#  - Macros with no definitions will NOT be considered as 0 or NULL.
+#  - Old(first) definitions will be overwritten by new(second) definitions
+#    without any backtrace, in case of duplicated definitions.
+#  - Command line arguments -Dxx will be the first definitions (and 
+#    possibly be overwritten by other definitions written in files processed).
+#  - Path like '~user' is not supported. Only '~/' is available.
+#  - Lines starting with '#' are just ignored and removed, if command
+#    interpretation failed.
+#
+
+use strict;
+
+# how verbose this script will be:
+my $msg_level = 1;
+my $warning   = 1;
+my $debug     = 2;
+
+# current file
+my $file = undef;
+
+
+# some sub-routines
+sub ExpandMacro($\%) {
+    my ($macro, $defs) = @_;
+    foreach ( grep($macro =~ m/\b$_\b/, keys %$defs) ) {
+	my $value = $defs->{$_};
+	if ( defined $value ) {
+	    if ( $msg_level >= $debug ) {
+		print STDERR "\t[$_] => [$value] in '$macro'\n";
+	    }
+	    $macro =~ s/\b$_\b/$value/g;
+	} else {
+	    my $warning_msg = "$0: skipping macro expansion of '$_'";
+	    $warning_msg .= " in [$macro], because no definition is given\n";
+	    warn $warning_msg;
+	}
+    }
+
+    # connect macros, removing "##"
+    my $glue = '([^# \t])[ \t]*##[ \t]*([^# \t])';
+    while ( $macro =~ s/$glue/$1$2/o ) {}
+    return $macro;
+}
+
+sub AddMacro (\%$;$) {
+    my ($defs, $symbol, $value) = @_;
+
+    # should not happen
+    if ( $msg_level >= $debug ) {
+	warn "AddMacro: Illegal symbol '$symbol' detected"
+	    unless ( $symbol =~ m/^[a-zA-Z_]\w*$/ );
+	if ( ( defined $value ) && ( $value =~ m/^\s+|\s+$/ ) ) {
+	    my $warning_msg = "AddMacro: Symbol definition '$symbol' = [$value],";
+	    $warning_msg .= " surrounded by whitespace";
+	    warn $warning_msg;
+	    $value =~ s/^\s+|\s+$//g;
+	}
+    }
+
+    # check re-definitions
+    if ( $msg_level >= $warning ) {
+	if ( exists $defs->{$symbol} ) {
+	    my $warning_msg = "$0: ";
+	    if ( defined $defs->{$symbol} ) {
+		if ( defined $value ) {
+		    if ( $defs->{$symbol} eq $value ) {
+			$warning_msg .= "redefinition of '$symbol' = [$value]";
+			$warning_msg .= " detected";
+		    } else {
+			$warning_msg .= "replacing previously given definition ";
+			$warning_msg .= "[$defs->{$symbol}] of '$symbol' with ";
+			$warning_msg .= "new definition [$value]";
+		    }
+		} else {
+		    $warning_msg .= "replacing previously given definition ";
+		    $warning_msg .= "[$defs->{$symbol}] of '$symbol' with ";
+		    $warning_msg .= "empty definition";
+		}
+	    } else {
+		if ( defined $value ) {
+		    $warning_msg .= "replacing empty definition of '$symbol' ";
+		    $warning_msg .= "with new definition [$value]";
+		} else {
+		    $warning_msg .= "redefinition of '$symbol' detected";
+		}
+	    }
+	    if ( defined $file ) {
+		$warning_msg .= " at line.$. of file: $file\n";
+	    } else {
+		$warning_msg .= " at command line\n";
+	    }
+	    warn $warning_msg;
+	}
+
+	if ( ( defined $value ) && ( $value =~ m/^=|^$symbol$/ ) ) {
+	    my $warning_msg = "$0: suspicious macro definition ";
+	    $warning_msg .= "'$symbol' => [$value] found at ";
+	    if ( defined $file ) {
+		$warning_msg .= "line.$. of file: $file\n";
+	    } else {
+		$warning_msg .= "command line\n";
+	    }
+	    warn $warning_msg;
+	}
+    }
+
+    # main part
+    if ( defined $value ) {
+	my $result = ExpandMacro($value, %$defs);
+	if ( $result eq $symbol ) {
+	    my $warning_msg = "$0: Recursive definition [$result] detected";
+	    $warning_msg .= "(and ignored), ";
+	    $warning_msg .= "while processing definition of '$symbol' = [$value]";
+	    if ( defined $file ) {
+		$warning_msg .= " at line.$. of file: $file\n";
+	    } else {
+		$warning_msg .= " at command line\n";
+	    }
+	    warn $warning_msg;
+	    return undef;
+	} else {
+	    foreach ( keys %$defs ) {
+		if ( ( defined $defs->{$_} ) &&
+		     ( $defs->{$_} =~ s/\b$symbol\b/$result/g ) &&
+		     ( $msg_level >= $debug ) ) {
+		    print STDERR
+			"\t[$symbol] => [$result] in [$defs->{$_}]\n";
+		}
+	    }
+	    $defs->{$symbol} = $result;
+	}
+    } else {
+	$defs->{$symbol} = undef;
+    }
+
+    return \%$defs;
+}
+
+sub RemoveMacro (\%$) {
+    my ($defs, $symbol) = @_;
+
+    # should not happen
+    if ( $msg_level >= $debug ) {
+	warn "RemoveMacro: Illegal symbol '$symbol' detected"
+	    unless ( $symbol =~ m/^[a-zA-Z_]\w*$/ );
+    }
+
+    if ( exists $defs->{$symbol} ) {
+	delete $defs->{$symbol};
+    }
+
+    return \%$defs;
+}
+
+sub AddPath(\@$) {
+    my ($inc, $path) = @_;
+
+    if ( $path eq '-' ) { # just ignore
+	if ( $msg_level >= $debug ) {
+	    print STDERR "ignoring gcc option '-I-'\n";
+	}
+	return undef;
+    }
+
+    $path =~ s%^~/%$ENV{HOME}/%; # replace '~/' => '$HOME/'
+    $path =~ s%/+$%%;            # remove the last '/' in $path, if any
+    foreach ( @$inc ) {
+	if ( $msg_level >= $debug ) {
+	    warn "ignored duplicated option: -I$path\n";
+	}
+	return undef if ( $path eq $_ ); # $path already exists
+    }
+    if ( -d $path ) {
+	push @$inc, $path;
+	return $path;
+    } elsif ( $msg_level >= $debug ) {
+	warn "ignored non-existent path: [$path]\n";
+	return undef;
+    }
+}
+
+sub FindFile($\@) {
+    my ($file, $dirs) = @_;
+
+    foreach ( @$dirs ) {
+	my $path = $_ . '/' . $file;
+	return $path if ( -e $path );
+    }
+    return undef; # not found
+}
+
+sub EatComments($) {
+    my $line = shift;
+    # replace comments with '\t'
+    $line =~ s%/\*[^*]*\*+([^/*][^*]*\*+)*/%\t%g; # C comments
+    $line =~ s%//.*$%\t%;                         # C++ comments
+    return $line;
+}
+
+sub Evaluate ($\%) {
+    my ($statement, $defs) = @_;
+
+    $statement =~ s/^\s+|\s+$//g;
+    while ( $statement =~
+	    m/(\bdefined(?:\s*\(\s*([a-zA-Z_]\w*)\s*\)|\s+([a-zA-Z_]\w*)))/ ) {
+	my $match  = $1;
+	my $symbol = (defined($2) ? $2 : $3);
+	my $value  = (exists($defs->{$symbol}) ? 1 : 0);
+	$statement =~ s/\Q$match\E/$value/;
+    }
+
+    $statement = ExpandMacro($statement, %$defs);
+
+    if ( $statement =~ m/^[^a-zA-Z_]+$/ ) {
+	my $result = eval($statement);
+	if ( $@ ) {
+	    warn "Error occured while evaluating[$statement]: $@";
+	    return -1;
+	} else {
+	    return $result;
+	}
+    } else {
+	warn "$0: Unrecognized statements[$statement]\n";
+	return -1;
+    }
+}
+
+sub Preprocess($\%\@);
+sub Preprocess($\%\@) {
+    my $prevFile = $file;
+
+    local *IN;
+    $file = shift;
+    open(IN, $file) || die "$0 cannot open file($file): $!\n";
+
+    my ($defs, $path) = @_;
+
+    my $in_comment = 0;
+    my @stack = ();
+    my $state = 3;
+    # state definitions
+    #  1: conditions matched at current block
+    #  0: not matched yet
+    # -1: already matched
+    #  2: else-block(printing)
+    # -2: else-block(not printing)
+    #  3: otherwise(outside the if-blocks)
+
+    my $line0;
+    my $lno = 0; my $step = 1;
+    while ( $line0 = <IN> ) {
+	$lno += $step; $step = 1;
+	$line0 =~ s/\r\n$/\n/; $line0 =~ tr/\r/\n/;
+	while ( substr($line0, -2) eq "\\\n" ) {
+	    my $next = <IN>;
+	    if ( defined $next ) {
+		$next =~ s/\r\n$/\n/; $next =~ tr/\r/\n/;
+		substr($line0, -2) = $next;
+		++$step;
+	    } else {
+		# eof
+		if ( $msg_level >= $warning ) {
+		    warn "$0: Unexpected EOF at file: $file\n";
+		}
+		last;
+	    }
+	}
+	chomp($line0);
+
+	my $line = "";
+	# Remove Comments
+	for ( split m%(\"(?:\\\"|.)*?\"|\'(?:\\\'|.)*?\'|/\*|\*/|//)%, $line0 ) {
+	    if ( $in_comment == 2 ) { # inside C++ comment: //
+		; # do nothing until the end of line
+	    } elsif ( $in_comment == 1 ) { # inside C comment: /*
+		if ( $_ eq '*/' ) {
+		    $in_comment = 0;
+		    $line .= " "; # replace comment by space
+		} else {
+		    ; # do nothing, and just ignore
+		}
+	    } elsif ( $_ eq '/*' ) {
+		$in_comment = 1; # C comment: /*
+		# $line .= " "; # replace comment by space
+	    } elsif ( $_ eq '//' ) {
+		$in_comment = 2; # C++ comment: //
+	    } else {
+		$line .= $_;
+	    }
+	}
+	if ( $in_comment == 2 ) {
+	    $in_comment = 0; # clear the flag if inside C++ comment: //
+	}
+
+	# I don't like '\f' or '\v'.
+	my $mark = '^[ \t]*#[ \t]*';
+	if ( $line =~ s/$mark//o ) {
+	    ### $line = EatComments($line);
+	    if ( $line =~ m/^(ifn?def)[ \t]+([a-zA-Z_]\w*)[ \t]*$/ ) {
+		unshift(@stack, $state);
+		if ( $state > 0 ) {
+		    $state = (($1 eq 'ifndef') ^ exists $defs->{$2});
+		} else {
+		    $state = -1; # no need to check conditions
+		}
+	    } elsif ( $line =~ m/^else[ \t]*$/ ) {
+		if ( $state == 0 ) { # no previous match
+		    $state = 2;
+		} elsif ( ($state == 1) || ($state == -1) ) {
+		    $state = -2;
+		} else {
+		    my $error = "$0: Unexpected ELSE-block detected";
+		    $error .= " at line.$lno of file: $file\n";
+		    close(IN);
+		    die $error;
+		}
+	    } elsif ( $line =~ m/^endif[ \t]*$/ ) {
+		if ( !defined($state = shift(@stack)) ) {
+		    my $error = "$0: Unexpected ENDIF-block detected";
+		    $error .= " at line.$lno of file: $file\n";
+		    close(IN);
+		    die $error;
+		}
+	    } elsif ( $line =~ m/^if\b(.*)$/ ) {
+		unshift(@stack, $state);
+		if ( $state > 0 ) {
+		    $state = Evaluate($1, %$defs);
+		    if ( $state < 0 ) {
+			my $error = "$0: Syntax error at line.$lno of file: ";
+			$error .= "$file\n";
+			close(IN);
+			die $error;
+		    }
+		} else {
+		    $state = -1; # no need to check conditions
+		}
+	    } elsif ( $line =~ m/^elif\b(.*)$/ ) {
+		if ( $state == 0 ) { # no previous match
+		    $state = Evaluate($1, %$defs);
+		    if ( $state < 0 ) {
+			my $error = "$0: Syntax error at line.$lno of file: ";
+			$error .= "$file\n";
+			close(IN);
+			die $error;
+		    }
+		} elsif ($state == 1) { # already matched
+		    $state = -1;
+		} elsif ($state == -1) {
+		    ; # do nothing
+		} else {
+		    my $error = "$0: Unexpected ELIF-block detected";
+		    $error .= " at line.$lno of file: $file\n";
+		    close(IN);
+		    die $error;
+		}
+	    } else {
+		if ( $state > 0 ) {
+		    if ( $line =~
+			 m/^define[ \t]+([a-zA-Z_]\w*)(\s*|\s+.*)$/ ) {
+			my $symbol = $1;
+			my $value  = $2;
+			$value =~ s/^\s+|\s+$//g;
+			if ( length $value ) {
+			    AddMacro(%$defs, $symbol, $value);
+			} else {
+			    AddMacro(%$defs, $symbol);
+			}
+		    } elsif ( $line =~
+			      m/^include(?:\s*<([^>]+?)>|\s*\"([^\"]+?)\"|
+					 \s+(\S+))\s*$/x ) {
+			my $f = (defined($1) ? $1 : (defined($2) ? $2 : $3));
+			my $p = FindFile($f, @$path);
+			if ( defined $p ) {
+			    Preprocess($p, %$defs, @$path);
+			} else {
+			    my $error = "$0: cannot find file <$f> ";
+			    $error .= "included from $file at line.$lno\n";
+			    close(IN);
+			    die $error;
+			}
+		    } elsif ( $line =~ m/^undef[ \t]+([a-zA-Z_]\w*)[ \t]*$/ ) {
+			RemoveMacro(%$defs, $1); #undef
+		    } elsif ( $line =~ m/^error[ \t]+/ ) {
+			warn "$file:$lno: #$line\n";
+		    } elsif ( $line =~ m/^pragma[ \t]+/ ) {
+			warn "$0: ignored unknown $line at line.$lno of file: $file\n";
+		    } elsif ( $line =~ m/^\s*$/ ) {
+			; # do nothing
+		    } else {
+			; # just ignore and remove this line
+			my $candidates = 'if(?:n?def)?|elif|else|endif|'
+			    . 'define|undef|include|error|pragma';
+			if ( ( $line =~ m/^(?:$candidates)\b/o ) &&
+			     ( $msg_level >= $warning ) ) {
+			    my $warning_msg = "ignoring suspicious comment[$line] ";
+			    $warning_msg .= "at line.$lno of file: $file\n";
+			    warn $warning_msg;
+			} elsif ( $msg_level >= $debug ) {
+			    my $warning_msg = "ignoring comment[$line] at line.$lno of ";
+			    $warning_msg .= "file: $file\n";
+			    warn $warning_msg;
+			}
+		    }
+		} else {
+		    ; # just pass through and ignore
+		}
+	    }
+	} else {
+	    if ( $state > 0 ) {
+		### $line = EatComments($line);
+		if ( $line !~ m/^\s*$/ ) { # remove empty line
+		    print ExpandMacro($line, %$defs), "\n";
+		}
+	    } else {
+		; # just pass through and ignore
+	    }
+	}
+    }
+
+    if ( $in_comment != 0 ) {
+	my $error = "$0: Unexpected EOF detected inside the C comments";
+	$error .= " in file: $file\n";
+	close(IN);
+	die $error;
+    }
+
+    my $nestLevel = scalar(@stack);
+    if ( ( $nestLevel != 0 ) || ( $state != 3 ) ) {
+	my $error = "$0: Unexpected EOF detected(nest=$nestLevel)";
+	$error .= " in file: $file\n";
+	close(IN);
+	die $error;
+    }
+
+    $file = $prevFile;
+    close(IN);
+}
+
+
+# Usage message
+my $USAGE = <<USAGE_END;
+ Usage)
+  $0 config-file [-Dmacro[=value] -Ipath -verbose[=N] ...]
+USAGE_END
+
+# check arguments
+die $USAGE unless @ARGV;
+
+
+my $config = shift;
+my %define  = ();
+my @include = ();
+
+
+# arguments analysis
+while ( @ARGV ) {
+    my $option = shift(@ARGV);
+    $option =~ s/\s+$//; # remove the trailing whitespace
+    if ( $option =~ m/^\s*-D\s*([a-zA-Z_].*)$/ ) {
+	# define: -Dsymbol or -Dmacro=value
+	my $symbol = $1;
+	if ( $symbol =~ m/^\w+$/ ) {
+	    # -Dsymbol
+	    AddMacro(%define, $symbol);
+	} elsif ( $symbol =~ m/^(\w+)\s*=\s*(.*)$/ ) {
+	    # -Dmacro=value
+	    AddMacro(%define, $1, $2);
+	} else {
+	    ; # just go down and ignored
+	}
+    } elsif ( $option =~ m/^\s*-I(.+)$/ ) {
+	# include path: -Ipath
+	AddPath(@include, $1);
+    } elsif ( $option =~ m/^\s*-(?:D|I)/ ) {
+	# mistakes in giving options?
+	if ( $msg_level >= $warning ) {
+	    warn "$0: unexpected option ignored [$option]\n";
+	} elsif ( $msg_level >= $debug ) {
+	    warn "ignored option: [$option]\n"; # debug
+	}
+    } elsif ( $option =~ m/^\s*-verbose(?:\s*=\s*([+-]?\d+))?$/ ) {
+	if ( defined $1 ) {
+	    $msg_level = $1;
+	} else {
+	    $msg_level = $debug;
+	}
+    } elsif ( $msg_level >= $debug ) {
+	warn "ignored option: [$option]\n"; # debug
+    }
+}
+
+
+# add current directory for the last candidate
+if ( ! grep($_ eq '.', @include) ) {
+    push @include, '.';
+}
+
+
+if ( $msg_level >= $debug ) {
+    print STDERR "\n[DEFINE]\n";
+    my ($sym, $def);
+    while ( ($sym, $def) = each %define ) {
+	if ( !defined $def ) {
+	    $def = '(-D only)';
+	}
+	print STDERR "  $sym\t=> $def\n";
+    }
+
+    print STDERR join("\n  ", "\n[INCLUDE]", @include), "\n";
+}
+
+
+Preprocess($config, %define, @include);

@@ -1,0 +1,12 @@
+/* 
+ *  ldscript-defsym
+ * 
+ *  Copyright 2002 Sony Corporation 
+ */
+
+_segment_base = 0x400000;
+_eh_frame_begin = ADDR(.eh_frame);
+_ctors_begin = ADDR(.ctors);
+_ctors_end = ADDR(.ctors) + SIZEOF(.ctors);
+_dtors_begin = ADDR(.dtors);
+_dtors_end = ADDR(.dtors) + SIZEOF(.dtors);

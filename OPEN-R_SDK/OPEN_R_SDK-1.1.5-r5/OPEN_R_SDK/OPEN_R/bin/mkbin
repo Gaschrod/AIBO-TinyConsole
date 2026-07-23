@@ -1,0 +1,213 @@
+#!/usr/bin/perl -w
+############################################################
+# mkbin
+# 
+# Copyright 2002,2003 Sony Corporation 
+#
+
+use strict;
+my $handle = select(STDERR);
+$| = 1;                         # Isn't it default?
+select($handle);
+
+sub verbosePrint(@ );
+sub run($ );
+sub findcrt($ );
+sub help();
+sub countSegment($ );
+
+my $verbose;
+my $prefix;
+my $nocrt = 0;
+my $nodefaultlib = 0;
+my $targetBase;
+my $target = "a.bin";
+my $version = "1.3";
+my $ocf = undef;
+my $vm = "vm";
+
+$ENV{"LC_ALL"} = "C";
+
+############################################################
+# read arguments
+
+my $i;
+my @restArgs;
+
+while (@ARGV) {
+    my $arg = shift(@ARGV);
+    if ($arg eq '-v') {
+	# -v: verbose mode
+	$verbose = 1;
+    }
+    elsif ($arg =~ /^-m(.*)/) {
+	if (defined($ocf)) {
+	    die "mkbin: .ocf multiply specified\n";
+	}
+	$ocf = length($1) ? $1 : shift(@ARGV);
+    }
+    elsif ($arg =~ /\.ocf$/) {
+	if (defined($ocf)) {
+	    die "mkbin: .ocf multiply specified\n";
+	}
+	$ocf = $arg;
+    }
+    elsif ($arg =~ /^-o(.*)/) {
+	$target = length($1) ? $1 : shift(@ARGV);
+    }
+    elsif ($arg =~ /^-p(.*)/) {
+	$prefix = length($1) ? $1 : shift(@ARGV);
+    }
+    elsif ($arg eq '--nodefaultlib') {
+	$nodefaultlib = 1;
+    }
+    elsif ($arg eq '--nocrt') {
+	$nocrt = 1;
+    }
+    elsif ($arg eq '--vm') {
+	$vm = "vm";
+    }
+    elsif ($arg eq '--novm') {
+	$vm = "novm";
+    }
+    elsif ($arg eq '--help') {
+	help();
+	exit(0);
+    }
+    else {
+	push(@restArgs, $arg);
+    }
+}
+
+# obsolete code: --vm and --novm have become optional argument
+if (!$nodefaultlib && !$vm) {
+    die "mkbin: --vm or --novm?\n          see mkbin --help\n";
+}
+
+$prefix ||= "/usr/local/OPEN_R_SDK";
+$targetBase = ($target =~ /^(.*)\.bin$/) ? $1 : $target;
+$ocf ||= "$targetBase.ocf";
+
+verbosePrint("mkbin version $version\n");
+verbosePrint("prefix: $prefix\n");
+verbosePrint("nodefaultlib: $nodefaultlib\n");
+verbosePrint("target: $target\n");
+verbosePrint("targetBase: $targetBase\n");
+verbosePrint("ocf: $ocf\n");
+
+############################################################
+# set constants
+#
+
+my $gxx = "$prefix/bin/mipsel-linux-g++";
+my $readelf = "$prefix/bin/mipsel-linux-readelf";
+my $scriptDefault = "$prefix/mipsel-linux/lib/ldscripts/elf32ltsmip.xbn";
+my $scriptDefsym = "$prefix/OPEN_R/ldscript/ldscript-defsym";
+my $scriptSnap  = "$prefix/OPEN_R/ldscript/ldscript-snap";
+my $scriptMerge = "$prefix/OPEN_R/ldscript/ldscript-merge";
+my $gensnapPl   = "$prefix/OPEN_R/bin/gensnap";
+my $adjustObj   = "$prefix/OPEN_R/lib/adjust.o";
+my $elfNosnap = "$targetBase.nosnap.elf";
+my $elfSnap   = "$targetBase.snap.elf";
+my $elfReloc  = "$targetBase.rel.elf";
+my $snapFile = "$targetBase.snap.cc";
+my $snapObj = "$targetBase.snap.o";
+my $snapInclude= "-I$prefix/OPEN_R/include -I$prefix/OPEN_R/include/R4000 ";
+
+my $crtbegin = $nocrt ? "" : findcrt("crtbegin.o");
+my $crtend   = $nocrt ? "" : findcrt("crtend.o");
+my $libgcc   = $nodefaultlib ? "" : findcrt("libgcc.a");
+my $ld = findcrt("collect2");
+
+my $libs     = $nodefaultlib ? "" : 
+    "-L$prefix/OPEN_R/lib -L$prefix/mipsel-linux/lib " . 
+    "-lm --start-group -lstdc++ $libgcc -lapsys -lOFSpub -lc- --end-group " . 
+    "-lmcoopstub -lnosys $libgcc";
+
+############################################################
+# invoke commands
+
+$ENV{PATH} = "$prefix/bin:$ENV{PATH}";  # for collect2 to find ld
+
+my $ldCommonArg = "-T $scriptDefault -T $scriptDefsym -e PrologueEntry " . 
+                  "$crtbegin @restArgs $libs $crtend";
+run("$ld -o $elfNosnap $ldCommonArg");
+if (countSegment($elfNosnap) != 2) {
+    $ldCommonArg .= " $adjustObj";
+    run("$ld -o $elfNosnap $ldCommonArg");
+    if (countSegment($elfNosnap) != 2) {
+	die "mkbin: can't adjust the size of $elfNosnap\n";
+    }
+}
+run("$ld -r -o $elfReloc $ldCommonArg");
+run("$gensnapPl $prefix $targetBase $elfNosnap $elfReloc $ocf $vm");
+run("$gxx $snapInclude -o $snapObj -c $snapFile");
+run("$ld -T $scriptSnap -o $elfSnap $snapObj"); 
+run("$ld -T $scriptMerge -o $target $elfNosnap $elfSnap");
+
+############################################################
+# subroutines
+#
+sub verbosePrint(@ ) {
+    if ($verbose) {
+	print @_;
+    }
+}
+
+sub run($ ) {
+    my $command = shift;
+    if ($verbose) {
+	print "$command\n";
+    }
+    my $ans = system($command);
+    if ($ans) {
+	my $status = $ans / 256;
+	my $sig = $ans % 256;
+	die "mkbin: running the following command failed($status, $sig): \n$command\n";
+    }
+}
+
+sub findcrt($ )
+{
+    my $crtname = shift;
+    my $command = "$gxx -print-file-name=$crtname";
+    my $ans = `$command`;
+    if ($?) {
+	die "mkbin: running the following command failed($?): $command\n";
+    }
+    chop($ans);
+    $ans;
+}
+
+sub help()
+{
+    print STDERR <<"EOF";
+usage: mkbin OPTIONS... LDARGS...
+	-o PATH	... Specify output file. (default: a.bin)
+	-m PATH	... Specify ocf file.
+	-p PATH	... Specify tool directory. (default: /usr/local/OPEN_R)
+	-n	... No execution.  Show command lines instead.
+	--nodefaultlib	... Do not link default libs
+	--novm		... Ignore mode and tlb field in .ocf
+	--nocrt		... Do not link startup routines
+	--help	... Show this message.
+EOF
+}
+
+sub countSegment($ )
+{
+    my $file = shift;
+    open(READELF, "$readelf -l $file |")
+	|| die "mkbin: can't open pipe: $readelf -p $file: $!\n";
+    my $count;
+    while (<READELF>) {
+	if (/There are (\d+) program headers,/) {
+	    $count = $1;
+	}
+    }
+    close(READELF);
+    if (!defined($count)) {
+	die "mkbin: can't analyze the result of readelf\n";
+    }
+    $count;
+}

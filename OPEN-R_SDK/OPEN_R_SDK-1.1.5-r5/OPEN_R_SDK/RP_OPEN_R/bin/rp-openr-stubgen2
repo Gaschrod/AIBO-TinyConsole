@@ -1,0 +1,42 @@
+#! /bin/sh
+#
+#  rp-openr-stubgen2
+#  Stub generator for Remote Processing OPEN-R
+#  Copyright 2002,2003 Sony Corporation
+#
+
+BIN_DIR="`dirname $0`"
+progname="`basename $0`"
+
+usage() {
+    echo "Usage: $progname [OPTIONS] FILE"
+    echo "  -h, --help   Show this message"
+    exit $1
+}
+
+stubgen_pp=$BIN_DIR/rp-openr-stubgen2-pp
+stubgen_body=$BIN_DIR/rp-openr-stubgen2-body
+stubgen_body_opts=""
+stubgen_pp_opts=""
+misc=""
+
+# parse options
+for i in "$@"
+do
+    case "$i"
+    in
+	-h|--help)
+	    usage 0;;
+	-g|--gtk)
+	    stubgen_body_opts="$stubgen_body_opts -g"; shift;;
+	-*)
+	    echo "$progname: unknown option $i"
+	    echo
+	    usage 1;;
+	*)
+	    # misc is usually a file
+	    misc="$misc $i"; shift;;
+    esac
+done
+
+perl $stubgen_pp $misc $stubgen_pp_opts | perl $stubgen_body $stubgen_body_opts

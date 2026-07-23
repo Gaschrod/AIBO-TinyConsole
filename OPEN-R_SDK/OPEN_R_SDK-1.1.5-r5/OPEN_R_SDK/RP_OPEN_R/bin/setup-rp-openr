@@ -1,0 +1,14 @@
+#! /bin/sh
+#
+#  Copyright 2002 Sony Corporation
+#
+
+BIN_DIR="`dirname $0`"
+progname="`basename $0`"
+
+exec_prefix="`$BIN_DIR/rp-openr-config --exec-prefix`"
+
+(cd $exec_prefix/RegistryManager; make)
+(cd $exec_prefix/OObjectManager; make)
+(cd $exec_prefix/OServiceManager; make)
+(cd $exec_prefix/TCPGateway; make)
