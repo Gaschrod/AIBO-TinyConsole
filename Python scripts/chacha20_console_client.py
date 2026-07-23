@@ -5,14 +5,27 @@
 # Ed25519-authenticated handshake).
 #
 # Usage:
-#   python3 chacha20_console_client.py
-#   python3 chacha20_console_client.py --ip 192.168.1.42 --port 7777
+#   Interactive:
+#     python3 chacha20_console_client.py --ip 192.168.1.124
+#   Latency benchmark (RTT of one command, repeated):
+#     python3 chacha20_console_client.py --ip 192.168.1.124 \
+#             --benchmark --iterations 1000 --warmup 20 --command PING \
+#             --csv aead_rtt.csv
+#   Client-side crypto micro-benchmark (encrypt+decrypt cost, no network):
+#     python3 chacha20_console_client.py --crypto-microbench --iterations 5000
+#
+# Measurement:
+#   - RTT is measured with time.perf_counter_ns() around encrypt -> send ->
+#     recv -> decrypt (full client-observed round trip) 
+#     Use PING (robot answers PONG) -> no motor "side effect" (non-measured latency)
+#   - Subtract the --crypto-microbench figure from the RTT to attribute the
+#     residual to network + robot-side compute.
 #
 # Dependency:
 #   pip install cryptography
 
-import argparse, socket, struct, os, sys
-from typing import Tuple
+import argparse, socket, struct, os, sys, time, statistics, csv
+from typing import Tuple, List
 
 from cryptography.hazmat.primitives.ciphers.aead import ChaCha20Poly1305
 from cryptography.hazmat.primitives.asymmetric.ed25519 import (
@@ -40,6 +53,7 @@ PAD_LEN_PREFIX = 2     # inner uint16 LE real length
 HANDSHAKE_CONTEXT  = b"AIBO-TinyConsole-Handshake"
 
 CHACHA_KEY = bytes([
+   
 ])
 
 # PLACEHOLDER, need to be filled with the public key of the robot.
@@ -47,7 +61,7 @@ CHACHA_KEY = bytes([
 ROBOT_PUBKEY_HEX = ""
 
 # The client's private Ed25519 key (32-byte hex). !SECRET!
-# The corresponding public key must be written in ConsoleConfig.h (robot side) 
+# The corresponding public key must be written in ConsoleConfig.h (robot side)
 # and is used to verify the client's identity during the
 # handshake. Left empty, this raises an error (fail closed).
 CLIENT_PRIVATE_KEY_HEX = ""
@@ -130,7 +144,259 @@ def aead_decrypt(aead: ChaCha20Poly1305,
 
 
 # ---------------------------------------------------------------
-#  Handshake 
+#  One timed request/response exchange
+# ---------------------------------------------------------------
+
+def exchange(s: socket.socket, aead: ChaCha20Poly1305, session_prefix: bytes,
+             tx_counter: int, rx_counter: int,
+             plaintext: bytes) -> Tuple[bytes, int, int, int]:
+    """
+    Send one encrypted command and read exactly one response frame.
+    Returns (response_plaintext, new_tx_counter, new_rx_counter, rtt_ns).
+
+    The timed window covers encrypt -> send -> recv -> decrypt: the full
+    client-observed round trip. Counters are threaded through explicitly so
+    the AEAD nonce sequence stays identical to normal operation.
+    """
+    t0 = time.perf_counter_ns()
+    tx_nonce = build_nonce(session_prefix, tx_counter, is_robot_tx=False)
+    frame    = aead_encrypt(aead, tx_nonce, plaintext)
+    s.sendall(frame)
+
+    rx_nonce = build_nonce(session_prefix, rx_counter, is_robot_tx=True)
+    response = aead_decrypt(aead, rx_nonce, s)
+    t1 = time.perf_counter_ns()
+    return response, tx_counter + 1, rx_counter + 1, t1 - t0
+
+
+# ---------------------------------------------------------------
+#  Measurement helpers (shared column format with the XOR client)
+# ---------------------------------------------------------------
+
+def _percentile(sorted_ns: List[int], p: float) -> float:
+    n = len(sorted_ns)
+    if n == 1:
+        return float(sorted_ns[0])
+    k = (n - 1) * p
+    f = int(k)
+    c = min(f + 1, n - 1)
+    return sorted_ns[f] + (sorted_ns[c] - sorted_ns[f]) * (k - f)
+
+
+def summarize(name: str, samples_ns: List[int]) -> None:
+    """Print a min/mean/median/p95/p99/max/stdev table in milliseconds."""
+    if not samples_ns:
+        print(f"\n=== {name}: no samples ===")
+        return
+    xs = sorted(samples_ns)
+    n = len(xs)
+    ms = lambda v: v / 1e6
+    mean = statistics.fmean(xs)
+    stdev = statistics.pstdev(xs) if n > 1 else 0.0
+    print(f"\n=== {name}  (n={n}) ===")
+    print(f"  min    {ms(xs[0]):9.3f} ms")
+    print(f"  mean   {ms(mean):9.3f} ms")
+    print(f"  median {ms(_percentile(xs, 0.50)):9.3f} ms")
+    print(f"  p95    {ms(_percentile(xs, 0.95)):9.3f} ms")
+    print(f"  p99    {ms(_percentile(xs, 0.99)):9.3f} ms")
+    print(f"  max    {ms(xs[-1]):9.3f} ms")
+    print(f"  stdev  {ms(stdev):9.3f} ms")
+
+
+def write_csv(path: str, samples_ns: List[int]) -> None:
+    """Dump raw per-sample RTTs (microseconds) for plotting in the thesis."""
+    with open(path, "w", newline="") as f:
+        w = csv.writer(f)
+        w.writerow(["sample", "rtt_us"])
+        for i, v in enumerate(samples_ns):
+            w.writerow([i, f"{v / 1e3:.3f}"])
+    print(f"  wrote {len(samples_ns)} samples to {path}")
+
+
+def run_benchmark(s: socket.socket, aead: ChaCha20Poly1305,
+                  session_prefix: bytes, args: argparse.Namespace) -> None:
+    plaintext = (args.command + "\n").encode("utf-8")
+    tx = rx = 0
+
+    # Warm-up (discarded): first exchanges pay ARP resolution, socket ramp, etc.
+    for _ in range(args.warmup):
+        _, tx, rx, _ = exchange(s, aead, session_prefix, tx, rx, plaintext)
+        if args.delay:
+            time.sleep(args.delay)
+
+    samples: List[int] = []
+    for _ in range(args.iterations):
+        resp, tx, rx, dt = exchange(s, aead, session_prefix, tx, rx, plaintext)
+        samples.append(dt)
+        if args.delay:
+            time.sleep(args.delay)
+
+    summarize(f"RTT '{args.command}' (AEAD ChaCha20-Poly1305)", samples)
+    if args.csv:
+        write_csv(args.csv, samples)
+
+    # Best-effort clean close.
+    try:
+        exchange(s, aead, session_prefix, tx, rx, b"QUIT\n")
+    except Exception:
+        pass
+
+
+def crypto_microbench(session_prefix: bytes, iterations: int) -> None:
+    """
+    Client-side ChaCha20-Poly1305 cost per command: one full-block encrypt +
+    one decrypt, no network. Must be substracted from the RTT to attribute
+    the remainder to the network and the robot.
+    """
+    aead = ChaCha20Poly1305(CHACHA_KEY)
+    payload = os.urandom(PAD_BLOCK)
+    header = struct.pack("<H", PAD_BLOCK)
+    samples: List[int] = []
+    for i in range(iterations):
+        nonce = build_nonce(session_prefix, i & 0x7FFFFFFF, is_robot_tx=False)
+        t0 = time.perf_counter_ns()
+        ct = aead.encrypt(nonce, payload, header)
+        aead.decrypt(nonce, ct, header)
+        t1 = time.perf_counter_ns()
+        samples.append(t1 - t0)
+    summarize("Client ChaCha20-Poly1305 encrypt+decrypt (local, per command)",
+              samples)
+
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        description="Encrypted, identity-verified console client for the AIBO TinyConsole."
+    )
+    parser.add_argument("--ip", "-i", default=DEFAULT_ROBOT_IP,
+                        help=f"AIBO IP address (default: {DEFAULT_ROBOT_IP})")
+    parser.add_argument("--port", "-p", type=int, default=DEFAULT_PORT,
+                        help=f"TinyConsole TCP port (default: {DEFAULT_PORT})")
+    # --- measurement options ---
+    parser.add_argument("--benchmark", action="store_true",
+                        help="Measure round-trip latency instead of the interactive REPL.")
+    parser.add_argument("--iterations", type=int, default=1000,
+                        help="Number of measured samples (default: 1000).")
+    parser.add_argument("--warmup", type=int, default=20,
+                        help="Warm-up exchanges discarded before measuring (default: 20).")
+    parser.add_argument("--command", default="PING",
+                        help="Command to time; use a side-effect-free one like PING (default: PING).")
+    parser.add_argument("--delay", type=float, default=0.0,
+                        help="Optional seconds to sleep between exchanges (default: 0).")
+    parser.add_argument("--csv", default=None,
+                        help="Write raw per-sample RTTs (microseconds) to this CSV file.")
+    parser.add_argument("--crypto-microbench", action="store_true",
+                        help="Measure local ChaCha20-Poly1305 encrypt+decrypt cost (no network) and exit.")
+    return parser.parse_args()
+
+
+def main():
+    args = parse_args()
+
+    # Local crypto micro-benchmark needs no robot / no keys.
+    if args.crypto_microbench:
+        # A fixed dummy prefix is fine: we are timing the primitive, not a session.
+        crypto_microbench(session_prefix=b"\x00" * 8, iterations=args.iterations)
+        return
+
+    if not ROBOT_PUBKEY_HEX:
+        print(
+            "ROBOT_PUBKEY_HEX is not set. Run keys_generator.py with robot argument once "
+            "and paste its printed robot_ed25519_pubkey_hex into this file."
+        )
+        sys.exit(1)
+    try:
+        robot_pubkey_obj = Ed25519PublicKey.from_public_bytes(bytes.fromhex(ROBOT_PUBKEY_HEX))
+    except ValueError as e:
+        print(f"ROBOT_PUBKEY_HEX is not valid: {e}")
+        sys.exit(1)
+
+    if not CLIENT_PRIVATE_KEY_HEX:
+        print(
+            "CLIENT_PRIVATE_KEY_HEX is not set. Run keys_generator.py with client argument once "
+            "and paste its printed client_ed25519_seed_hex into this file."
+        )
+        sys.exit(1)
+    try:
+        client_privkey_obj = Ed25519PrivateKey.from_private_bytes(
+            bytes.fromhex(CLIENT_PRIVATE_KEY_HEX))
+    except ValueError as e:
+        print(f"CLIENT_PRIVATE_KEY_HEX is not valid: {e}")
+        sys.exit(1)
+
+    # Connect (timed)
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        t0 = time.perf_counter_ns()
+        s.connect((args.ip, args.port))
+        t_connect = time.perf_counter_ns() - t0
+        print(f"Connected to robot at {args.ip}:{args.port}")
+    except Exception as e:
+        print(f"Connection error: {e}")
+        sys.exit(1)
+
+    # Handshake (timed): banner, nonce exchange, mutual signature verification
+    try:
+        t0 = time.perf_counter_ns()
+        banner, session_prefix, session_key = do_handshake(
+            s, robot_pubkey_obj, client_privkey_obj)
+        t_handshake = time.perf_counter_ns() - t0
+    except (ConnectionError, OSError) as e:
+        print(f"Handshake failed: {e}")
+        s.close()
+        sys.exit(1)
+
+    print(f"Banner: {banner}")
+    print("Robot identity verified against ROBOT_PUBKEY_HEX.")
+    print("Client identity signature sent (robot verifies against pinned key).")
+    print(f"[timing] TCP connect: {t_connect/1e6:.3f} ms | "
+          f"handshake (nonce + mutual Ed25519): {t_handshake/1e6:.3f} ms")
+
+    aead = ChaCha20Poly1305(session_key)
+
+    # Benchmark mode: measure and exit.
+    if args.benchmark:
+        try:
+            run_benchmark(s, aead, session_prefix, args)
+        finally:
+            s.close()
+        return
+
+    tx_counter = 0
+    rx_counter = 0
+
+    # Command loop (interactive) — now also prints per-command RTT.
+    try:
+        while True:
+            try:
+                cmd = input("AIBO> ")
+            except EOFError:
+                break
+            if not cmd:
+                continue
+
+            plaintext = (cmd + "\n").encode("utf-8")
+            try:
+                response, tx_counter, rx_counter, dt = exchange(
+                    s, aead, session_prefix, tx_counter, rx_counter, plaintext)
+                print("ROBOT:", response.decode("utf-8", errors="replace").strip(),
+                      f"  [rtt {dt/1e6:.3f} ms]")
+            except (ValueError, InvalidTag):
+                print("ERROR: authentication tag mismatch — dropping response")
+            except ConnectionError:
+                print("Robot closed the connection.")
+                break
+
+            if cmd.strip().upper() == "QUIT":
+                break
+
+    except KeyboardInterrupt:
+        print("\nDisconnecting...")
+    finally:
+        s.close()
+
+
+# ---------------------------------------------------------------
+#  Handshake
 # ---------------------------------------------------------------
 
 def do_handshake(s: socket.socket,
@@ -193,112 +459,5 @@ def do_handshake(s: socket.socket,
 
     return banner.decode("ascii", errors="replace").strip(), session_prefix, CHACHA_KEY
 
-
-def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(
-        description="Encrypted, identity-verified console client for the AIBO TinyConsole."
-    )
-    parser.add_argument(
-        "--ip", "-i", default=DEFAULT_ROBOT_IP,
-        help=f"AIBO IP address (default: {DEFAULT_ROBOT_IP})",
-    )
-    parser.add_argument(
-        "--port", "-p", type=int, default=DEFAULT_PORT,
-        help=f"TinyConsole TCP port (default: {DEFAULT_PORT})",
-    )
-    return parser.parse_args()
-
-
-def main():
-    args = parse_args()
-
-    if not ROBOT_PUBKEY_HEX:
-        print(
-            "ROBOT_PUBKEY_HEX is not set. Run keys_generator.py with robot argument once "
-            "and paste its printed robot_ed25519_pubkey_hex into this file."
-        )
-        sys.exit(1)
-    try:
-        robot_pubkey_obj = Ed25519PublicKey.from_public_bytes(bytes.fromhex(ROBOT_PUBKEY_HEX))
-    except ValueError as e:
-        print(f"ROBOT_PUBKEY_HEX is not valid: {e}")
-        sys.exit(1)
-
-    if not CLIENT_PRIVATE_KEY_HEX:
-        print(
-            "CLIENT_PRIVATE_KEY_HEX is not set. Run keys_generator.py with client argument once "
-            "and paste its printed client_ed25519_seed_hex into this file."
-        )
-        sys.exit(1)
-    try:
-        client_privkey_obj = Ed25519PrivateKey.from_private_bytes(
-            bytes.fromhex(CLIENT_PRIVATE_KEY_HEX))
-    except ValueError as e:
-        print(f"CLIENT_PRIVATE_KEY_HEX is not valid: {e}")
-        sys.exit(1)
-
-    # Connect
-    try:
-        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        s.connect((args.ip, args.port))
-        print(f"Connected to robot at {args.ip}:{args.port}")
-    except Exception as e:
-        print(f"Connection error: {e}")
-        sys.exit(1)
-
-    # Handshake: banner, nonce exchange, signature verification
-    try:
-        banner, session_prefix, session_key = do_handshake(
-            s, robot_pubkey_obj, client_privkey_obj)
-    except (ConnectionError, OSError) as e:
-        print(f"Handshake failed: {e}")
-        s.close()
-        sys.exit(1)
-
-    print(f"Banner: {banner}")
-    print("Robot identity verified against ROBOT_PUBKEY_HEX.")
-    print("Client identity signature sent (robot verifies against pinned key).")
-
-    tx_counter = 0
-    rx_counter = 0
-    aead = ChaCha20Poly1305(session_key)
-
-    # Command loop
-    try:
-        while True:
-            try:
-                cmd = input("AIBO> ")
-            except EOFError:
-                break
-            if not cmd:
-                continue
-
-            plaintext = (cmd + "\n").encode("utf-8")
-
-            # 1. Encrypt and send
-            tx_nonce    = build_nonce(session_prefix, tx_counter, is_robot_tx=False)
-            tx_counter += 1
-            frame       = aead_encrypt(aead, tx_nonce, plaintext)
-            s.sendall(frame)
-
-            # 2. Receive and decrypt
-            try:
-                rx_nonce    = build_nonce(session_prefix, rx_counter, is_robot_tx=True)
-                rx_counter += 1
-                response    = aead_decrypt(aead, rx_nonce, s)
-                print("ROBOT:", response.decode("utf-8", errors="replace").strip())
-            except (ValueError, InvalidTag):
-                print("ERROR: authentication tag mismatch — dropping response")
-            except ConnectionError:
-                print("Robot closed the connection.")
-                break
-
-            if cmd.strip().upper() == "QUIT":
-                break
-
-    except KeyboardInterrupt:
-        print("\nDisconnecting...")
-    finally:
-        s.close()
 
 main()
