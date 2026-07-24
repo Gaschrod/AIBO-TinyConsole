@@ -1,0 +1,21 @@
+\begin{table}[ht]
+  \centering
+  \caption{Round-trip latency of one PING command over the TinyConsole link.}
+  \label{tab:latency}
+  \begin{tabular}{lrrr}
+    \toprule
+    Metric & XOR baseline & ChaCha20-Poly1305 & $\Delta$ \\
+    \midrule
+    Samples & 2000 & 2000 &  \\
+    Min (ms) & 2.477 & 64.983 & +62.506 \\
+    Mean (ms) & 5.576 & 77.456 & +71.880 \\
+    Median (ms) & 3.583 & 75.860 & +72.277 \\
+    p95 (ms) & 9.735 & 80.894 & +71.159 \\
+    p99 (ms) & 16.770 & 95.085 & +78.315 \\
+    Max (ms) & 236.093 & 595.241 & +359.148 \\
+    Std dev (ms) & 14.106 & 19.271 & +5.165 \\
+    \bottomrule
+  \end{tabular}
+  \par\smallskip
+  \footnotesize $\Delta$ = ChaCha20-Poly1305 $-$ XOR baseline; mean overhead +71.880~ms ($\times$13.89).
+\end{table}

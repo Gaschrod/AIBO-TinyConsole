@@ -5,7 +5,7 @@ Inline MITM test for the AIBO TinyConsole ChaCha20-Poly1305 / Ed25519 protocol.
 Does *NOT* sniff-and-reinject at L2/L3 -> transparent TCP proxy that uses the same TinyConsole wire format, 
 logs every field, and can actively attack the stream. 
 
-Four functions:
+Five functions:
 
     --mode passthrough   Baseline which produces the capture logs used by nonce_audit.py /
                          cipher_sample.py / replay_session.py 
