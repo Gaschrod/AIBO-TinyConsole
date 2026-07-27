@@ -53,6 +53,7 @@ PAD_LEN_PREFIX = 2     # inner uint16 LE real length
 HANDSHAKE_CONTEXT  = b"AIBO-TinyConsole-Handshake"
 
 CHACHA_KEY = bytes([
+    
 ])
 
 # PLACEHOLDER, need to be filled with the public key of the robot.

@@ -327,7 +327,6 @@ TinyConsole::DoInit(const OSystemEvent& event)
 	OpenPrimitives();
     NewCommandVectorData();
 
-
 	OPENR::SetMotorPower(opowerON);
     
     return oSUCCESS;
