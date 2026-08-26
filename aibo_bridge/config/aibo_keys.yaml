@@ -1,0 +1,5 @@
+aibo_bridge:
+  ros__parameters:
+    chacha_key: "<64 hex chars>"
+    robot_ed25519_pubkey: "<64 hex chars>"
+    client_ed25519_seed: "<64 hex chars>"
