@@ -93,6 +93,7 @@ AIBO-TinyConsole/
 └── OPEN-R_SDK # Sony official SDK files (unmodified)
 │     ├── normal_size_screen.sh # a bash script to easily add 1920x1080 screen resolution in Ubuntu 8.04
 │     └── patch_file.txt # necessary apt in order to make the SDK work
+│
 ├── XOR_TinyConsole # naive implementation of the console which only uses XOR encryption, no movements and only supports "PING" and "QUIT" commands
 ├── aibo_bridge/ # ros 2 implementation (run on Ubuntu 24.04 or equivalent)
 │     ├── aibo_bridge/
@@ -102,22 +103,26 @@ AIBO-TinyConsole/
 │     |   ├── aibo_teleop_joy.py   # PS4/DualShock joystick teleop
 │     |   ├── aibo_teleop_key.py   # keyboard teleop
 │     |   └── replay_watermark.py  # client-side rollback protection
+│     │
 │     ├── launch/
 │     │   ├── aibo_bridge_launch.py
 │     │   └── aibo_teleop_joy_launch.py
+│     │
 │     ├── resource/
-|         └── aibo_bridge
 │     ├── package.xml
 │     ├── setup.cfg
 │     └── setup.py
+│
 ├── c20p1305/ # pointer to Will Glozer's implementation of ChaCha20+Poly1305
 ├── config_files/ # .CFG files needed in the OPEN-R filesystem on the AIBO's Memory Stick
 ├── docs/ # various relevant documentations
 │    ├── OPEN-R_docs/ # all Sony's official documentation related to OPEN-R
 │    ├── Sony_official_docs/ # other docs made by Sony related to the ERS-7 and alike
 │    └── other_relevant_docs/ # docs on how to program using the OPEN-R, ROS2 and URBI
+│
 ├── measurements/ # various measurements related to RTT and the cryptographic overhead added by TinyConsole
 │    └──  CSV
+│
 ├── motion_files/ # files used to create movements in TinyConsole (mainly FORWARD and BACKWARD which was very hard to get right without those files)
 ├── python_scripts/ # various important scripts
 │    ├── testing_&_measurements/ # scripts used to generate csv, measurements and to test the implementation
@@ -125,16 +130,16 @@ AIBO-TinyConsole/
 │    ├── keys_generator.py # used to generate the various keys used to secure the communication
 │    ├── replay_watermak.py # script used by chacha20_console_client.py in order to prevent rollback attack
 │    └── xor_console_client.py # initial naive implementation using only XOR, must be used with XOR_TinyConsole (runs on AIBO)
+│
 ├── secure_TinyConsole/                       # robot side — must be compiled with the OPEN-R SDK toolchain
 │    ├── Makefile
 |    └── TinyConsole/ # necessary files for TinyConsole, refer to the master thesis/OPEN-R documentation for more details on which file does what
+│
 ├── thesis_defense_slides # slides that were used during the thesis defense (pdf & pptx)
 ├── LICENSE # MIT license
 ├── README.md # the file you're reading
 └── The Man-Bites-Dog Phenomenon in Cybersecurity - A Case Study on Hardening Legacy Hardware Communications with the Sony AIBO ERS-7.pdf # Master Thesis
 ```
-
-> This is the layout this README assumes. If your actual repo differs (e.g. firmware and ROS 2 code live at the top level instead of under `firmware/` and `ros2_ws/`), adjust the paths in the commands below accordingly.
 
 ---
 
@@ -165,7 +170,7 @@ See [`ConsoleConfig.h`](secure_TinyConsole/TinyConsole/ConsoleConfig.h) and the 
 - The `joy` package if you want the PS4/DualShock teleop (`sudo apt install ros-jazzy-joy`).
 
 **To just try the protocol without ROS 2:**
-- Python 3 + `cryptography` — that's it (`tools/chacha20_console_client.py` has no other dependencies).
+- Python 3 + `cryptography` — that's it (`python_scripts/chacha20_console_client.py` has no other dependencies).
 
 ---
 
@@ -183,7 +188,7 @@ The OPEN-R SDK is Sony's proprietary toolchain for AIBO development; this README
 
 A few points that aren't obvious from the manuals and are worth knowing going in:
 
-- Set `OPENRSDK_ROOT` to point at your SDK install before building — the [`Makefile`](firmware/Makefile) reads it directly (defaults to `/usr/local/OPEN_R_SDK`).
+- Set `OPENRSDK_ROOT` to point at your SDK install before building — the [`Makefile`](secure_TinyConsole/TinyConsole/Makefile) reads it directly (defaults to `/usr/local/OPEN_R_SDK`).
 - The toolchain rejects **non-ASCII characters** in source files outright — no smart quotes, en-dashes, arrows, etc., anywhere in `.c`/`.cc`/`.h` files, or you'll get cascading parse errors far from the actual offending character.
 - This is an old, Makefile-based build system; don't expect it to play nicely with CMake/C99-oriented tooling.
 
@@ -202,13 +207,13 @@ make clean                                    # removes compiled files, necessar
 
 `make install` writes into a local `MS/` staging directory (override with `INSTALLDIR=`), mirroring the OPEN-R Memory Stick layout. Copy the resulting `MS/OPEN-R` tree onto the AIBO's actual Memory Stick alongside your `OPEN-R` configuration (BASIC, WLAN or WCONSOLE), following the SDK's own instructions for registering an OPEN-R object to run at boot.
 
-`rfc7539_test.c` (in `firmware/crypto/`) is a standalone host-side test of the AEAD implementation against the RFC 7539 test vectors — useful for sanity-checking the crypto primitives with a normal host compiler before cross-compiling for the robot.
+`rfc7539_test.c` (in `secure_TinyConsole/TinyConsole/`) is a standalone host-side test of the AEAD implementation against the RFC 7539 test vectors — useful for sanity-checking the crypto primitives with a normal host compiler before cross-compiling for the robot.
 
 ---
 
 ## Generating key material
 
-Both the robot's and the client's identities are generated **offline**, once, with [`tools/keys_generator.py`](tools/keys_generator.py):
+Both the robot's and the client's identities are generated **offline**, once, with [`python_scripts/keys_generator.py`](python_scripts/keys_generator.py):
 
 ```bash
 python3 python_scripts/keys_generator.py --role robot       # robot's Ed25519 identity
@@ -309,19 +314,19 @@ At a high level, one session looks like this:
 
 ```
 Client                                              Robot (TinyConsole)
-  |  TCP connect                                          |
-  |<---------------- banner + 12-byte nonce ---------------|
+  |  TCP connect                                            |
+  |<---------------- banner + 12-byte nonce ----------------|
   |----------------- 12-byte client nonce ----------------->|
-  |<---------- 64-byte Ed25519 signature (robot) ----------|   (verify against pinned robot pubkey)
+  |<---------- 64-byte Ed25519 signature (robot) -----------|   (verify against pinned robot pubkey)
   |------------ 64-byte Ed25519 signature (client) -------->|   (robot verifies against pinned client pubkey)
-  |======================  AEAD session established  ======|
-  |------ [len][ciphertext][16-byte Poly1305 tag] -------->|   commands
-  |<----- [len][ciphertext][16-byte Poly1305 tag] ---------|   responses
+  |==============  AEAD session established  ===============|
+  |------ [len][ciphertext][16-byte Poly1305 tag] --------->|   commands
+  |<----- [len][ciphertext][16-byte Poly1305 tag] ----------|   responses
 ```
 
 Every AEAD frame carries a **fixed-size padded plaintext block**, so frame sizes don't leak command length. The 12-byte nonce is built from a persistent session counter, the client's IP, and a per-message counter, with TX/RX separated by a high bit.
 
-This section is intentionally a summary, not a specification — for the full protocol rationale (nonce construction, why HChaCha20-derived session keys, the no-RNG workaround, etc.), see the [`Thesis`](The Man-Bites-Dog Phenomenon in Cybersecurity - A Case Study on Hardening Legacy Hardware Communications with the Sony AIBO ERS-7.pdf).
+This section is intentionally a summary, not a specification — for the full protocol rationale (nonce construction, why HChaCha20-derived session keys, the no-RNG workaround, etc.), see the [`thesis`](The_Man-Bites-Dog_Phenomenon_in_Cybersecurity.pdf).
 
 ---
 
@@ -363,8 +368,8 @@ If you wish to build on top of it, feel free to fork the repository or to send m
 
 This repository is the software artifact accompanying a master's thesis on securing legacy systems network communications using the Sony AIBO ERS-7 as the case study.
 
-> Regardin, A. (2026). *[The Man-Bites-Dog Phenomenon in Cybersecurity - A Case Study on Hardening Legacy Hardware Communications with the Sony AIBO ERS-7.pdf]* (Master's thesis). Université libre de Bruxelles (ULB).
-> Full text: [`The Man-Bites-Dog Phenomenon in Cybersecurity - A Case Study on Hardening Legacy Hardware Communications with the Sony AIBO ERS-7.pdf`](The Man-Bites-Dog Phenomenon in Cybersecurity - A Case Study on Hardening Legacy Hardware Communications with the Sony AIBO ERS-7.pdf)
+> Regardin, A. (2026). *The Man-Bites-Dog Phenomenon in Cybersecurity - A Case Study on Hardening Legacy Hardware Communications with the Sony AIBO ERS-7* (Master's thesis). Université libre de Bruxelles (ULB).
+> Full text: [`The_Man-Bites-Dog_Phenomenon_in_Cybersecurity.pdf`](The_Man-Bites-Dog_Phenomenon_in_Cybersecurity.pdf)
 > 
 ---
 
