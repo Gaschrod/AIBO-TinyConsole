@@ -66,19 +66,19 @@ The broader argument (developed in the thesis, not fully reproduced here) is eco
 ```
  PC / ROS 2 Jazzy (Ubuntu 24.04)                              Sony AIBO ERS-7 (Aperios / OPEN-R)
 ┌──────────────────────────────┐                              ┌───────────────────────────────────┐
-│                              │   Encrypted TCP, port 7777  │                                   │
-│   aibo_teleop_key /          │   ChaCha20-Poly1305 AEAD    │                                   │
-│   aibo_teleop_joy            │   mutual Ed25519 handshake  │                                   │
-│        │                     │◄───────────────────────────►│      TinyConsole (OPEN-R object)  │
-│        ▼                     │                             │      - handshake + AEAD frames    │
-│   /cmd_vel, ~/command  ──►   │                             │      - motion state machine       │
-│                              │                             │            │                      │
-│   aibo_bridge_node           │                             │            ▼                      │
-│   (AiboLink, Python/         │                             │   OPEN-R joint commands (12 legs  │
-│    `cryptography`)           │                             │   joints), PID-gained actuators   │
-│        │                     │                             │                                   │
-│        ▼                     │                             │                                   │
-│   ~/response, ~/connected    │                             │                                   │
+│                              │   Encrypted TCP, port 7777   │                                   │
+│   aibo_teleop_key /          │   ChaCha20-Poly1305 AEAD     │                                   │
+│   aibo_teleop_joy            │   mutual Ed25519 handshake   │                                   │
+│        │                     │◄────────────────────────────►│      TinyConsole (OPEN-R object)  │
+│        ▼                     │                              │      - handshake + AEAD frames    │
+│   /cmd_vel, ~/command  ──►   │                              │      - motion state machine       │
+│                              │                              │            │                      │
+│   aibo_bridge_node           │                              │            ▼                      │
+│   (AiboLink, Python/         │                              │   OPEN-R joint commands (12 legs  │
+│    `cryptography`)           │                              │   joints), PID-gained actuators   │
+│        │                     │                              │                                   │
+│        ▼                     │                              │                                   │
+│   ~/response, ~/connected    │                              │                                   │
 └──────────────────────────────┘                              └───────────────────────────────────┘
 ```
 
